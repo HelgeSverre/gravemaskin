@@ -2,6 +2,19 @@ namespace Gravemaskin
 
 open System.Numerics
 
+/// Shell-owned POD buffers for interpolated rendering (defined here because
+/// World fills it; contains no GL types).
+type RenderSnapshot(capacity: int) =
+    member val Tick = 0L with get, set
+    member val Count = 0 with get, set
+    member val Capacity = capacity
+    member val Handles = Array.zeroCreate<int> capacity
+    member val X = Array.zeroCreate<float32> capacity
+    member val Y = Array.zeroCreate<float32> capacity
+    member val Z = Array.zeroCreate<float32> capacity
+    member val Radius = Array.zeroCreate<float32> capacity
+    member val Materials = Array.zeroCreate<byte> capacity
+
 /// The mutable world (bloom precedent). The house invariant is headless
 /// determinism behind Step(InputFrame), not immutability: BEPU is pool-based
 /// and soil is flat arrays.
@@ -119,6 +132,31 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
 
         { Tick = tick
           BodyCount = physics.BodyCount }
+
+    /// Copy the render-relevant clump state into a shell-owned snapshot.
+    /// Preallocated arrays, no allocation: the shell keeps two of these and
+    /// interpolates between them by handle.
+    member _.SnapshotInto(snapshot: RenderSnapshot) =
+        snapshot.Tick <- tick
+        let count = min clumps.Count snapshot.Capacity
+        snapshot.Count <- count
+
+        for i in 0 .. count - 1 do
+            let bodyRef = physics.Simulation.Bodies.[clumps.Handles.[i]]
+            let position = bodyRef.Pose.Position
+            snapshot.Handles.[i] <- clumps.Handles.[i].Value
+            snapshot.X.[i] <- position.X
+            snapshot.Y.[i] <- position.Y
+            snapshot.Z.[i] <- position.Z
+            snapshot.Materials.[i] <- clumps.Materials.[i]
+
+            let props = Tuning.soil (Volume.materialOfByte clumps.Materials.[i])
+            let volume = float32 clumps.Masses.[i] / Volume.looseDensity props
+
+            snapshot.Radius.[i] <-
+                System.MathF.Cbrt(volume * 3.0f / (4.0f * System.MathF.PI))
+                |> max Clumps.MinRadius
+                |> min Clumps.MaxRadius
 
     interface System.IDisposable with
         member _.Dispose() = (physics :> System.IDisposable).Dispose()

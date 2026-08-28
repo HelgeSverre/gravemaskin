@@ -49,6 +49,9 @@ type SoilState(config: SoilConfig) =
     let tilesZ = (config.CellsZ + SoilConfig.TileSize - 1) / SoilConfig.TileSize
     let dirtySettle = Array.zeroCreate<bool> (tilesX * tilesZ)
     let dirtyMesh = Array.zeroCreate<bool> (tilesX * tilesZ)
+    // Renderer's own dirty flags (cleared by the shell, not by physics —
+    // collision swaps and render rebuilds run on different budgets).
+    let dirtyRender = Array.zeroCreate<bool> (tilesX * tilesZ)
 
     member _.Config = config
     member _.Occupancy = occupancy
@@ -61,6 +64,7 @@ type SoilState(config: SoilConfig) =
     member _.TilesZ = tilesZ
     member _.DirtySettle = dirtySettle
     member _.DirtyMesh = dirtyMesh
+    member _.DirtyRender = dirtyRender
 
     member _.Index(x: int, y: int, z: int) =
         (y * config.CellsZ + z) * config.CellsX + x
@@ -74,6 +78,7 @@ type SoilState(config: SoilConfig) =
         let tile = this.TileIndex(x, z)
         dirtySettle.[tile] <- true
         dirtyMesh.[tile] <- true
+        dirtyRender.[tile] <- true
 
 [<RequireQualifiedAccess>]
 module Volume =

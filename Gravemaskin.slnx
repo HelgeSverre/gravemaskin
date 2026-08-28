@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Gravemaskin.Core/Gravemaskin.Core.fsproj" />
+    <Project Path="src/Gravemaskin/Gravemaskin.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Gravemaskin.Tests/Gravemaskin.Tests.fsproj" />
