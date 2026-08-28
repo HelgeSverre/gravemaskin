@@ -45,8 +45,10 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
             Array.fill state.DirtyMesh 0 state.DirtyMesh.Length false
         | None -> ()
 
-    /// Collision-mesh swaps allowed per tick once running (amortization).
-    static member val MeshSwapBudget = 8 with get
+    /// Collision-mesh swaps allowed per tick once running. Each swap builds
+    /// a fresh BVH for a 2048-triangle tile (~ms); two per tick keeps p99
+    /// inside budget while a dig trail still refreshes within a few ticks.
+    static member val MeshSwapBudget = 2 with get
 
     member _.Physics = physics
     member _.Tick = tick
