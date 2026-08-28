@@ -41,17 +41,26 @@ compact it into ruts — the ground remembers.
 
 ## Honest machinery
 
-- Machines modeled from real spec sheets: a 1.7-tonne mini excavator with real
-  breakout forces, pump flows, and relief pressures, with bigger iron to come.
+- Machines modeled from real spec sheets: a 1.7-tonne mini excavator and a
+  22-tonne tracked excavator, each with its published breakout forces, pump
+  flows, and relief pressures — and the breakout forces aren't typed in, they
+  *emerge* from bore diameters, relief valves, and linkage geometry.
 - A fixed 60 Hz deterministic simulation — record a dig, replay the disaster.
 - Fully procedural: every mesh, material, glyph, and sound generated in code.
   The download is small; the holes are large.
 - Written in F#. Yes, the excavator game is functional-first. The dirt is the
   only thing allowed to be filthy.
 
+Also: trench walls that collapse when you cut them too steep in the wrong
+soil, tracks that compact loose spoil into ruts, dual-stick ISO/SAE controls
+(keyboard or gamepad), a diesel that labors when the pumps do, and a save
+format that accounts for every kilogram before it lets you quit.
+
 ## Status
 
-Early development, built in the open. macOS, Windows, and Linux.
+Playable sandbox, built in the open. macOS, Windows, and Linux.
+`just run` starts it; F1 toggles a free camera with a terrain-sculpting
+brush; F5/F9 save and load; `--machine 320` brings the big iron.
 
 Developer things live in [`SPEC.md`](SPEC.md) (the phased plan) and
 [`docs/research/`](docs/research/) (the engineering research behind the soil
