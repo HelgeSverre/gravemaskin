@@ -55,9 +55,11 @@ module SoilCollision =
                 let p10 = Vector3(float32 (x + 1) * size, h10, float32 z * size)
                 let p01 = Vector3(float32 x * size, h01, float32 (z + 1) * size)
                 let p11 = Vector3(float32 (x + 1) * size, h11, float32 (z + 1) * size)
-                // Wound so the face normal points +Y (up).
-                triangles.[i] <- Triangle(p00, p01, p10)
-                triangles.[i + 1] <- Triangle(p10, p01, p11)
+                // BEPU meshes are one-sided; empirically the collidable face
+                // is the CLOCKWISE side (bodies fell straight through the
+                // counterclockwise winding), hence B/C swapped.
+                triangles.[i] <- Triangle(p00, p10, p01)
+                triangles.[i + 1] <- Triangle(p10, p11, p01)
                 i <- i + 2
 
         Mesh(triangles, Vector3.One, pool)

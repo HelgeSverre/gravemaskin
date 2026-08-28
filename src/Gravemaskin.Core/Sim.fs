@@ -2,19 +2,6 @@ namespace Gravemaskin
 
 open System.Numerics
 
-/// Shell-owned POD buffers for interpolated rendering (defined here because
-/// World fills it; contains no GL types).
-type RenderSnapshot(capacity: int) =
-    member val Tick = 0L with get, set
-    member val Count = 0 with get, set
-    member val Capacity = capacity
-    member val Handles = Array.zeroCreate<int> capacity
-    member val X = Array.zeroCreate<float32> capacity
-    member val Y = Array.zeroCreate<float32> capacity
-    member val Z = Array.zeroCreate<float32> capacity
-    member val Radius = Array.zeroCreate<float32> capacity
-    member val Materials = Array.zeroCreate<byte> capacity
-
 /// The mutable world (bloom precedent). The house invariant is headless
 /// determinism behind Step(InputFrame), not immutability: BEPU is pool-based
 /// and soil is flat arrays.
@@ -41,6 +28,12 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
             None
 
     let clumps = ClumpPool()
+    let mutable machine: Machine option = None
+
+    let surfaceHeight (x: float32) (z: float32) =
+        match soilState with
+        | Some state -> Soil.surfaceHeight state x z
+        | None -> 0.0f
 
     do
         // Initial collision build: every tile, synchronously, before tick 0.
@@ -59,6 +52,15 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
     member _.Tick = tick
     member _.SoilState = soilState
     member _.Clumps = clumps
+    member _.Machine = machine
+
+    /// Spawn the excavator with its tracks resting at the surface under
+    /// `position` (XZ).
+    member _.SpawnMachine(position: Vector3) =
+        let ground = surfaceHeight position.X position.Z
+        let spawned = Machine(physics, Tuning.u17, Vector3(position.X, ground + 0.01f, position.Z))
+        machine <- Some spawned
+        spawned
 
     /// Events raised by the most recent Step; consume before stepping again.
     member _.Events: ResizeArray<GameEvent> = events
@@ -117,8 +119,13 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
 
             total
 
-    member _.Step(_input: InputFrame) : RenderState =
+    member _.Step(input: InputFrame) : RenderState =
         events.Clear()
+
+        match machine with
+        | Some m -> m.Step(input, Tuning.FixedDt, surfaceHeight)
+        | None -> ()
+
         physics.Step()
 
         match soilState with
@@ -157,6 +164,10 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
                 System.MathF.Cbrt(volume * 3.0f / (4.0f * System.MathF.PI))
                 |> max Clumps.MinRadius
                 |> min Clumps.MaxRadius
+
+        match machine with
+        | Some m -> m.FillSnapshot snapshot
+        | None -> snapshot.MachinePartCount <- 0
 
     interface System.IDisposable with
         member _.Dispose() = (physics :> System.IDisposable).Dispose()

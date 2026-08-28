@@ -67,6 +67,22 @@ let ``ghost bucket digs a trench over 600 ticks with exact mass conservation`` (
     Assert.True(trenchHeight < virginHeight - 0.15f, $"trench {trenchHeight} vs virgin {virginHeight}")
 
 [<Fact>]
+let ``bodies rest ON the soil mesh — the winding regression guard`` () =
+    // The escape guard (mass recycling at y < −10) once masked total mesh
+    // collision failure: everything fell through and conservation stayed
+    // green. This asserts actual support, which the guard cannot fake.
+    use world = TestKit.soilWorld Topsoil
+    let state = world.SoilState.Value
+
+    let probe =
+        Bepu.addDynamicSphere world.Physics.Simulation (Vector3(8.0f, 3.0f, 8.0f)) 0.4f 20.0f
+
+    TestKit.stepAll 240 InputFrame.empty world |> ignore
+    let position = world.Physics.Simulation.Bodies.[probe].Pose.Position
+    let surface = Soil.surfaceHeight state position.X position.Z
+    Assert.InRange(position.Y - surface, 0.2f, 0.6f)
+
+[<Fact>]
 let ``no clump ever tunnels below the soil or escapes the world`` () =
     use world = TestKit.soilWorld Topsoil
     world.CarveSphere(Vector3(8.0f, 1.9f, 8.0f), 0.7f) |> ignore

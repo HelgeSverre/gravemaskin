@@ -14,13 +14,25 @@ module Bepu =
 
     [<Struct>]
     type NarrowPhaseCallbacks =
+        /// Collision group per body handle value; equal nonzero groups don't
+        /// collide (how linked machine parts skip self-collision).
+        val Groups: int[]
+        new(groups: int[]) = { Groups = groups }
+
         interface INarrowPhaseCallbacks with
             member _.Initialize(_simulation: Simulation) = ()
 
-            member _.AllowContactGeneration
+            member this.AllowContactGeneration
                 (_workerIndex: int, a: CollidableReference, b: CollidableReference, _speculativeMargin: byref<float32>)
                 =
-                a.Mobility = CollidableMobility.Dynamic || b.Mobility = CollidableMobility.Dynamic
+                if a.Mobility = CollidableMobility.Static && b.Mobility = CollidableMobility.Static then
+                    false
+                elif a.Mobility <> CollidableMobility.Static && b.Mobility <> CollidableMobility.Static then
+                    let groupA = this.Groups.[a.BodyHandle.Value]
+                    let groupB = this.Groups.[b.BodyHandle.Value]
+                    groupA = 0 || groupA <> groupB
+                else
+                    true
 
             member _.AllowContactGeneration
                 (_workerIndex: int, _pair: CollidablePair, _childIndexA: int, _childIndexB: int)
@@ -158,10 +170,14 @@ module Bepu =
         (axis: Vector3)
         (command: ActuatorCommand)
         =
+        // BEPU's AngularAxisMotor targets A's velocity relative to B; our
+        // convention (and jointAngle) is child-relative-to-parent, so negate
+        // here once instead of at every call site (verified empirically:
+        // without this, "boom up" drives the boom into the ground).
         let mutable motor =
             AngularAxisMotor(
                 LocalAxisA = axis,
-                TargetVelocity = command.TargetVelocity,
+                TargetVelocity = -command.TargetVelocity,
                 Settings = MotorSettings(command.MaxForce, 1e-6f)
             )
 

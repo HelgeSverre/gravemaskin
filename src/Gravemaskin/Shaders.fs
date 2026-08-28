@@ -60,6 +60,29 @@ void main()
 }
 """
 
+    let solidVertex =
+        """#version 410 core
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 normal;
+
+uniform mat4 viewProjection;
+uniform mat4 model;
+uniform vec3 solidColor;
+
+out vec3 vNormal;
+out vec3 vColor;
+out vec3 vWorld;
+
+void main()
+{
+    vec4 world = model * vec4(position, 1.0);
+    vNormal = mat3(model) * normal;
+    vColor = solidColor;
+    vWorld = world.xyz;
+    gl_Position = viewProjection * world;
+}
+"""
+
     let clodVertex =
         """#version 410 core
 layout(location = 0) in vec3 position;      // unit icosahedron

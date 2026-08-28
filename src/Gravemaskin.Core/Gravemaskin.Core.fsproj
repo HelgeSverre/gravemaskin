@@ -11,7 +11,10 @@
     <Compile Include="Soil/Particles.fs" />
     <Compile Include="Soil/Collision.fs" />
     <Compile Include="Soil/Api.fs" />
+    <Compile Include="Excavator/Linkage.fs" />
+    <Compile Include="Excavator/Hydraulics.fs" />
     <Compile Include="Physics.fs" />
+    <Compile Include="Excavator/Machine.fs" />
     <Compile Include="Sim.fs" />
   </ItemGroup>
   <ItemGroup>

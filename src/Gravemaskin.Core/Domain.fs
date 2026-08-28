@@ -1,6 +1,7 @@
 namespace Gravemaskin
 
 open System
+open System.Numerics
 
 /// Types only — no logic, no constants (those live in Tuning.fs).
 [<AutoOpen>]
@@ -90,9 +91,47 @@ module Domain =
         | RockStruck
         | TipWarning
 
+    type CylinderJoint =
+        { /// Distance pivot → cylinder anchor on the parent link (m).
+          Ra: float32
+          /// Distance pivot → cylinder anchor on the child link (m).
+          Rb: float32
+          /// Angle between the two anchor rays when the joint angle is 0.
+          AngleOffset: float32
+          /// Cylinder bore diameter (m) — piston side area.
+          Bore: float32
+          /// Rod diameter (m) — annulus = piston − rod area (retract is weaker;
+          /// operators genuinely notice, so the asymmetry is kept).
+          Rod: float32
+          /// Positive joint rotation = cylinder extend? (drives which area caps
+          /// which direction)
+          ExtendPositive: bool
+          /// Joint angle limits (rad), enforced in software at the motor.
+          MinAngle: float32
+          MaxAngle: float32
+          /// Hydraulic circuit index and this function's max flow share (L/min).
+          Circuit: int
+          QMax: float32 }
+
     /// POD snapshot handed to the shell each tick; the render thread
     /// interpolates between two of these (never between mutable worlds).
     [<Struct>]
     type RenderState =
         { Tick: int64
           BodyCount: int }
+
+/// Shell-owned POD buffers for interpolated rendering (defined here because
+/// World fills it; contains no GL types).
+type RenderSnapshot(capacity: int) =
+    member val Tick = 0L with get, set
+    member val Count = 0 with get, set
+    member val Capacity = capacity
+    member val Handles = Array.zeroCreate<int> capacity
+    member val X = Array.zeroCreate<float32> capacity
+    member val Y = Array.zeroCreate<float32> capacity
+    member val Z = Array.zeroCreate<float32> capacity
+    member val Radius = Array.zeroCreate<float32> capacity
+    member val Materials = Array.zeroCreate<byte> capacity
+    member val MachinePartCount = 0 with get, set
+    member val MachinePositions = Array.zeroCreate<Vector3> 8
+    member val MachineOrientations = Array.zeroCreate<Quaternion> 8

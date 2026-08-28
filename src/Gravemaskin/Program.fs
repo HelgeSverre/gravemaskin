@@ -105,13 +105,20 @@ let main args =
     let mutable current = RenderSnapshot(Clumps.MaxClumps)
     let mutable inputSequence = 0L
 
-    // Fly camera.
+    // Cameras: orbit-follow (default, machine controls) and free fly (F1,
+    // brush controls).
+    let mutable flyMode = Environment.GetEnvironmentVariable "GRAV_FLY" = "1"
     let mutable cameraPosition = Vector3(16.0f, 8.0f, 26.0f)
     let mutable yaw = -1.57f
     let mutable pitch = -0.45f
+    let mutable orbitYaw = 2.5f
+    let mutable orbitPitch = 0.5f
+    let mutable orbitDistance = 9.0f
     let mutable lastMouse = Vector2.Zero
     let mutable mouseInitialized = false
+    let mutable flyToggleLatch = false
     let mutable brushHit: Vector3 voption = ValueNone
+    let mutable cameraForward = Vector3(0.0f, -0.4f, -0.9f)
     let brushRadius = 0.45f
 
     // Stats for the title bar (the Phase 2 "HUD").
@@ -126,9 +133,13 @@ let main args =
 
         world <- Sim.createSoilWorld 0xD16D16UL Topsoil 2.0f
         state <- world.SoilState.Value
+        world.SpawnMachine(Vector3(16.0f, 0.0f, 16.0f)) |> ignore
         renderer <- Renderer(gl, state)
         world.SnapshotInto previous
-        world.SnapshotInto current)
+        world.SnapshotInto current
+
+        input.Mice.[0].add_Scroll (fun _ scroll ->
+            orbitDistance <- Math.Clamp(orbitDistance - scroll.Y * 1.2f, 3.0f, 30.0f)))
 
     window.add_Update (fun elapsed ->
         let keyboard = input.Keyboards.[0]
@@ -141,30 +152,81 @@ let main args =
             lastMouse <- mouseNow
             mouseInitialized <- true
 
+        // F1 toggles fly/brush mode (edge-latched).
+        let f1 = keyboard.IsKeyPressed Key.F1
+
+        if f1 && not flyToggleLatch then
+            flyMode <- not flyMode
+
+        flyToggleLatch <- f1
+
+        let machinePosition =
+            match world.Machine with
+            | Some m -> world.Physics.Simulation.Bodies.[m.Chassis].Pose.Position
+            | None -> Vector3.Zero
+
         if mouse.IsButtonPressed MouseButton.Right then
             let delta = mouseNow - lastMouse
-            yaw <- yaw + delta.X * 0.003f
-            pitch <- Math.Clamp(pitch - delta.Y * 0.003f, -1.5f, 1.5f)
+
+            if flyMode then
+                yaw <- yaw + delta.X * 0.003f
+                pitch <- Math.Clamp(pitch - delta.Y * 0.003f, -1.5f, 1.5f)
+            else
+                orbitYaw <- orbitYaw + delta.X * 0.004f
+                orbitPitch <- Math.Clamp(orbitPitch + delta.Y * 0.004f, 0.05f, 1.4f)
 
         lastMouse <- mouseNow
 
         let forward =
-            Vector3(MathF.Cos yaw * MathF.Cos pitch, MathF.Sin pitch, MathF.Sin yaw * MathF.Cos pitch)
+            if flyMode then
+                Vector3(MathF.Cos yaw * MathF.Cos pitch, MathF.Sin pitch, MathF.Sin yaw * MathF.Cos pitch)
+            else
+                // Orbit: camera placed on a sphere around the machine.
+                let offset =
+                    Vector3(
+                        MathF.Cos orbitYaw * MathF.Cos orbitPitch,
+                        MathF.Sin orbitPitch,
+                        MathF.Sin orbitYaw * MathF.Cos orbitPitch
+                    )
+                    * orbitDistance
 
-        let right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY))
-        let speed = (if keyboard.IsKeyPressed Key.ShiftLeft then 24.0f else 9.0f) * float32 elapsed
-        let mutable move = Vector3.Zero
-        if keyboard.IsKeyPressed Key.W then move <- move + forward
-        if keyboard.IsKeyPressed Key.S then move <- move - forward
-        if keyboard.IsKeyPressed Key.D then move <- move + right
-        if keyboard.IsKeyPressed Key.A then move <- move - right
-        if keyboard.IsKeyPressed Key.E then move <- move + Vector3.UnitY
-        if keyboard.IsKeyPressed Key.Q then move <- move - Vector3.UnitY
+                cameraPosition <- machinePosition + Vector3(0.0f, 1.0f, 0.0f) + offset
+                Vector3.Normalize(machinePosition + Vector3(0.0f, 1.0f, 0.0f) - cameraPosition)
 
-        if move.LengthSquared() > 0.0f then
-            cameraPosition <- cameraPosition + Vector3.Normalize move * speed
+        if flyMode then
+            let right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY))
+            let speed = (if keyboard.IsKeyPressed Key.ShiftLeft then 24.0f else 9.0f) * float32 elapsed
+            let mutable move = Vector3.Zero
+            if keyboard.IsKeyPressed Key.W then move <- move + forward
+            if keyboard.IsKeyPressed Key.S then move <- move - forward
+            if keyboard.IsKeyPressed Key.D then move <- move + right
+            if keyboard.IsKeyPressed Key.A then move <- move - right
+            if keyboard.IsKeyPressed Key.E then move <- move + Vector3.UnitY
+            if keyboard.IsKeyPressed Key.Q then move <- move - Vector3.UnitY
 
-        brushHit <- raycastSurface state cameraPosition forward
+            if move.LengthSquared() > 0.0f then
+                cameraPosition <- cameraPosition + Vector3.Normalize move * speed
+
+        cameraForward <- forward
+        brushHit <- if flyMode then raycastSurface state cameraPosition forward else ValueNone
+
+        // Machine controls (ISO-flavored keyboard split, SPEC §7): A/D swing,
+        // W/S stick, ↑/↓ or I/K boom, J/L bucket, Q/E left track, Z/C right.
+        let axis negative positive =
+            (if keyboard.IsKeyPressed positive then 1.0f else 0.0f)
+            - (if keyboard.IsKeyPressed negative then 1.0f else 0.0f)
+
+        let machineInput =
+            if flyMode then
+                InputFrame.empty
+            else
+                { InputFrame.empty with
+                    Swing = axis Key.A Key.D
+                    Stick = axis Key.W Key.S // W = stick out (negative is crowd)
+                    Boom = axis Key.K Key.I + axis Key.Down Key.Up
+                    Bucket = axis Key.J Key.L
+                    LeftTrack = axis Key.E Key.Q
+                    RightTrack = axis Key.C Key.Z }
 
         // Fixed-step sim.
         accumulator <- min 0.25 (accumulator + elapsed)
@@ -181,7 +243,7 @@ let main args =
 
             inputSequence <- inputSequence + 1L
 
-            world.Step { InputFrame.empty with Sequence = inputSequence } |> ignore
+            world.Step { machineInput with Sequence = inputSequence } |> ignore
 
             let swap = previous
             previous <- current
@@ -193,10 +255,8 @@ let main args =
         let size = window.FramebufferSize
         gl.Viewport(0, 0, uint32 size.X, uint32 size.Y)
 
-        let forward =
-            Vector3(MathF.Cos yaw * MathF.Cos pitch, MathF.Sin pitch, MathF.Sin yaw * MathF.Cos pitch)
-
-        let view = Matrix4x4.CreateLookAt(cameraPosition, cameraPosition + forward, Vector3.UnitY)
+        let view =
+            Matrix4x4.CreateLookAt(cameraPosition, cameraPosition + cameraForward, Vector3.UnitY)
 
         let projection =
             Matrix4x4.CreatePerspectiveFieldOfView(
@@ -218,7 +278,7 @@ let main args =
             let fps = float statFrames / statTime
 
             window.Title <-
-                $"GRAVEMASKIN — {fps:F0} fps · tick {world.Tick} · clumps {world.Clumps.Count} · LMB dig · G dump · RMB look · WASD fly"
+                $"GRAVEMASKIN — {fps:F0} fps · tick {world.Tick} · clumps {world.Clumps.Count} · AD swing WS stick IK boom JL bucket QE/ZC tracks · F1 fly/brush"
 
             statFrames <- 0
             statTime <- 0.0
@@ -231,6 +291,12 @@ let main args =
             | Some path ->
                 screenshot gl size.X size.Y path
                 printfn $"screenshot written to {path}"
+
+                match world.Machine with
+                | Some m ->
+                    let p = world.Physics.Simulation.Bodies.[m.Chassis].Pose.Position
+                    printfn $"chassis at {p}, surface {Soil.surfaceHeight state p.X p.Z}"
+                | None -> ()
             | None -> ()
 
             window.Close()

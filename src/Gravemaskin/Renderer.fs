@@ -15,6 +15,47 @@ type Renderer(gl: GL, state: SoilState) =
 
     let terrainProgram = GlUtil.program gl Shaders.terrainVertex Shaders.terrainFragment
     let clodProgram = GlUtil.program gl Shaders.clodVertex Shaders.clodFragment
+    let solidProgram = GlUtil.program gl Shaders.solidVertex Shaders.clodFragment
+
+    // Unit cube with face normals, for machine parts.
+    let cubeVerts =
+        // 6 faces × 4 verts × (pos3 + normal3)
+        let faces =
+            [| Vector3.UnitX; -Vector3.UnitX; Vector3.UnitY; -Vector3.UnitY; Vector3.UnitZ; -Vector3.UnitZ |]
+
+        let data = ResizeArray<float32>()
+
+        for normal in faces do
+            let u = if MathF.Abs normal.Y > 0.9f then Vector3.UnitX else Vector3.Cross(Vector3.UnitY, normal)
+            let v = Vector3.Cross(normal, u)
+
+            for (su, sv) in [| (-1.0f, -1.0f); (1.0f, -1.0f); (1.0f, 1.0f); (-1.0f, 1.0f) |] do
+                let p = (normal + u * su + v * sv) * 0.5f
+
+                for value in [| p.X; p.Y; p.Z; normal.X; normal.Y; normal.Z |] do
+                    data.Add value
+
+        data.ToArray()
+
+    let cubeIndices =
+        [| for face in 0..5 do
+               let b = uint32 (face * 4)
+               yield! [| b; b + 1u; b + 2u; b; b + 2u; b + 3u |] |]
+
+    let cubeVao = gl.GenVertexArray()
+    let cubeVbo = gl.GenBuffer()
+    let cubeIbo = gl.GenBuffer()
+
+    /// Visual boxes per machine body part: (body index, local offset, size, color).
+    let machineBoxes =
+        [| 0, Vector3(0.0f, -0.1f, -0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f) // track L
+           0, Vector3(0.0f, -0.1f, 0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f) // track R
+           0, Vector3(0.0f, 0.05f, 0.0f), Vector3(1.5f, 0.3f, 1.0f), Vector3(0.25f, 0.25f, 0.27f) // undercarriage
+           1, Vector3(0.1f, 0.0f, 0.0f), Vector3(1.05f, 0.7f, 0.95f), Vector3(0.85f, 0.45f, 0.08f) // cab
+           1, Vector3(-0.75f, -0.1f, 0.0f), Vector3(0.45f, 0.5f, 0.9f), Vector3(0.3f, 0.3f, 0.32f) // counterweight
+           2, Vector3.Zero, Vector3(1.9f, 0.18f, 0.15f), Vector3(0.85f, 0.45f, 0.08f) // boom
+           3, Vector3.Zero, Vector3(1.1f, 0.14f, 0.12f), Vector3(0.85f, 0.45f, 0.08f) // stick
+           4, Vector3.Zero, Vector3(0.5f, 0.4f, 0.6f), Vector3(0.2f, 0.2f, 0.22f) |] // bucket
 
     // Shared index buffer: same grid topology for every tile.
     let tileIndexCount = SoilConfig.TileSize * SoilConfig.TileSize * 6
@@ -190,6 +231,17 @@ type Renderer(gl: GL, state: SoilState) =
             gl.VertexAttribPointer(2u, 3, VertexAttribPointerType.Float, false, stride, IntPtr(24).ToPointer())
             rebuildTile tile
 
+        // Unit cube for machine parts.
+        gl.BindVertexArray cubeVao
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, cubeVbo)
+        GlUtil.upload gl BufferTargetARB.ArrayBuffer cubeVerts cubeVerts.Length BufferUsageARB.StaticDraw
+        gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, cubeIbo)
+        GlUtil.upload gl BufferTargetARB.ElementArrayBuffer cubeIndices cubeIndices.Length BufferUsageARB.StaticDraw
+        gl.EnableVertexAttribArray 0u
+        gl.VertexAttribPointer(0u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr.Zero.ToPointer())
+        gl.EnableVertexAttribArray 1u
+        gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
+
         // Clod mesh + instance buffer.
         gl.BindVertexArray clodVao
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, clodVbo)
@@ -244,6 +296,51 @@ type Renderer(gl: GL, state: SoilState) =
         for tile in 0 .. tileCount - 1 do
             gl.BindVertexArray tileVaos.[tile]
             gl.DrawElements(PrimitiveType.Triangles, uint32 tileIndexCount, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer())
+
+        // Machine parts: interpolate each body pose, then draw its visual
+        // boxes with the solid shader.
+        if current.MachinePartCount > 0 then
+            gl.UseProgram solidProgram
+            gl.UniformMatrix4(gl.GetUniformLocation(solidProgram, "viewProjection"), 1u, false, &vp.M11)
+            GlUtil.uniform3f gl solidProgram "sunDirection" sun
+            GlUtil.uniform3f gl solidProgram "cameraPosition" cameraPosition
+            gl.BindVertexArray cubeVao
+
+            for (part, offset, size, color) in machineBoxes do
+                if part < current.MachinePartCount then
+                    let hasPrevious = part < previous.MachinePartCount
+
+                    let position =
+                        if hasPrevious then
+                            Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
+                        else
+                            current.MachinePositions.[part]
+
+                    let orientation =
+                        if hasPrevious then
+                            Quaternion.Slerp(
+                                previous.MachineOrientations.[part],
+                                current.MachineOrientations.[part],
+                                alpha
+                            )
+                        else
+                            current.MachineOrientations.[part]
+
+                    let mutable model =
+                        Matrix4x4.CreateScale size
+                        * Matrix4x4.CreateTranslation offset
+                        * Matrix4x4.CreateFromQuaternion orientation
+                        * Matrix4x4.CreateTranslation position
+
+                    gl.UniformMatrix4(gl.GetUniformLocation(solidProgram, "model"), 1u, false, &model.M11)
+                    GlUtil.uniform3f gl solidProgram "solidColor" color
+
+                    gl.DrawElements(
+                        PrimitiveType.Triangles,
+                        uint32 cubeIndices.Length,
+                        DrawElementsType.UnsignedInt,
+                        IntPtr.Zero.ToPointer()
+                    )
 
         // Clumps: interpolate by matching handles (swap-removes reorder the
         // pool, so index-matching would smear positions across clumps).

@@ -83,6 +83,68 @@ module Tuning =
           DigDepth = 6.72f<m>
           Reach = 9.86f<m> }
 
+    /// U17 linkage joints. Anchor geometry is estimated from machine
+    /// proportions; bores are chosen so the PUBLISHED breakout forces emerge
+    /// from pressure × area × moment arm (verified by test, never hardcoded):
+    /// bucket ≈ 15.8 kN at the tip (spec 15.2), stick crowd ≈ 9.3 kN
+    /// (spec 8.5), boom torque ≈ 22 kN·m.
+    let u17BoomJoint =
+        { Ra = 0.35f
+          Rb = 0.90f
+          AngleOffset = 1.4f
+          Bore = 0.065f
+          Rod = 0.035f
+          ExtendPositive = true
+          MinAngle = -0.5f
+          MaxAngle = 1.15f
+          Circuit = 0
+          QMax = 17.3f }
+
+    let u17StickJoint =
+        { Ra = 0.75f
+          Rb = 0.28f
+          AngleOffset = 2.6f
+          Bore = 0.060f
+          Rod = 0.032f
+          ExtendPositive = false // extend crowds the stick in (negative θ)
+          MinAngle = -2.3f
+          MaxAngle = 0.25f
+          Circuit = 1
+          QMax = 17.3f }
+
+    let u17BucketJoint =
+        { Ra = 0.35f
+          Rb = 0.22f
+          AngleOffset = 2.0f
+          Bore = 0.055f
+          Rod = 0.030f
+          ExtendPositive = false // extend curls the bucket in (negative θ)
+          MinAngle = -2.4f
+          MaxAngle = 0.35f
+          Circuit = 0
+          QMax = 17.3f }
+
+    /// Swing drive: 9.1 rpm ≈ 0.95 rad/s, small machine ≈ 2.5 kN·m at its
+    /// own (lower) relief. Swing brake = holding cap when idle.
+    let u17SwingTorque = 2500.0f
+    let u17SwingMaxVel = 0.95f
+    let u17SwingQMax = 10.4f
+
+    /// Track drive: velocity-servo per side, tractive cap ≈ μN per track.
+    let u17TrackMaxForce = 6000.0f
+    let u17TrackMaxSpeed = 1.18f // 4.25 km/h high range
+    let u17TrackQMax = 8.0f
+    /// Proportional gain: force ramps in over ~a few tenths of m/s of slip.
+    let u17TrackGain = 20000.0f
+
+    /// Component masses (kg): 860 undercarriage, 550 house+counterweight,
+    /// 180 boom, 90 stick, 50 bucket = 1730 total (spec operating mass).
+    let u17Masses = {| Chassis = 860.0f; House = 550.0f; Boom = 180.0f; Stick = 90.0f; Bucket = 50.0f |}
+
+    /// Reference radii for validation: bucket pivot → cutting edge, and
+    /// max reach used in stall tests.
+    let u17BucketTipRadius = 0.7f
+
     /// Input shaping (applied inside the sim for determinism):
     /// deadband → power curve → first-order valve lag.
     let InputDeadband = 0.10f

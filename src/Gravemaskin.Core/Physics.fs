@@ -18,10 +18,13 @@ type Physics(threadCount: int) =
         else
             null
 
+    // Collision groups by body handle value (0 = collide with everything).
+    let collisionGroups = Array.zeroCreate<int> 8192
+
     let simulation =
         Simulation.Create(
             pool,
-            Bepu.NarrowPhaseCallbacks(),
+            Bepu.NarrowPhaseCallbacks(collisionGroups),
             Bepu.PoseIntegratorCallbacks(Vector3(0.0f, -9.81f, 0.0f)),
             SolveDescription(Tuning.SolverVelocityIterations, Tuning.SolverSubsteps)
         )
@@ -40,6 +43,8 @@ type Physics(threadCount: int) =
 
     member _.Simulation = simulation
     member _.Pool = pool
+
+    member _.SetCollisionGroup(handle: BodyHandle, group: int) = collisionGroups.[handle.Value] <- group
 
     /// (Re)build the collision mesh for one soil tile, disposing the old one.
     /// Deterministic: called at fixed points in Step, in tile-index order.
