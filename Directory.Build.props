@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <LangVersion>preview</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <!-- Latency over throughput: the sim must never eat a background-GC pause
+         mid-tick. The tick path is zero-alloc by invariant (enforced by test),
+         so the collector has little to do anyway. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+</Project>

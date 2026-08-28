@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore Gravemaskin.sln
+      - name: Lint
+        run: dotnet format Gravemaskin.sln --verify-no-changes --no-restore
+      - name: Build
+        run: dotnet build Gravemaskin.sln --no-restore
+      - name: Test
+        run: dotnet test tests/Gravemaskin.Tests/Gravemaskin.Tests.fsproj --no-build --nologo
