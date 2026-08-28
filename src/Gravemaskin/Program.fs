@@ -81,10 +81,11 @@ let main args =
 
     let maxFrames = argValue "--frames" |> Option.map int
     let screenshotPath = argValue "--screenshot"
+    let mutable settings = Settings.load ()
 
     let mutable options = WindowOptions.Default
     options.Title <- "GRAVEMASKIN"
-    options.Size <- Vector2D<int>(1440, 900)
+    options.Size <- Vector2D<int>(settings.WindowWidth, settings.WindowHeight)
     options.VSync <- true
 
     options.API <-
@@ -95,8 +96,11 @@ let main args =
     let mutable gl = Unchecked.defaultof<GL>
     let mutable input = Unchecked.defaultof<IInputContext>
     let mutable renderer = Unchecked.defaultof<Renderer>
+    let mutable hud = Unchecked.defaultof<Hud>
+    let mutable audio: AudioSystem option = None
     let mutable world = Unchecked.defaultof<World>
     let mutable state = Unchecked.defaultof<SoilState>
+    let mutable patternToggleLatch = false
 
     // Fixed-step accumulator (house loop) + snapshot double buffer.
     let mutable accumulator = 0.0
@@ -135,6 +139,15 @@ let main args =
         state <- world.SoilState.Value
         world.SpawnMachine(Vector3(16.0f, 0.0f, 16.0f)) |> ignore
         renderer <- Renderer(gl, state)
+        hud <- Hud(gl)
+
+        // Audio is best-effort: no OpenAL, no problem, the game plays silent.
+        audio <-
+            try
+                Some(new AudioSystem(settings.Volume))
+            with _ ->
+                None
+
         world.SnapshotInto previous
         world.SnapshotInto current
 
@@ -216,17 +229,74 @@ let main args =
             (if keyboard.IsKeyPressed positive then 1.0f else 0.0f)
             - (if keyboard.IsKeyPressed negative then 1.0f else 0.0f)
 
+        // P toggles ISO/SAE (edge-latched, persisted).
+        let pKey = keyboard.IsKeyPressed Key.P
+
+        if pKey && not patternToggleLatch then
+            settings <-
+                { settings with
+                    ControlPattern =
+                        if settings.ControlPattern = ControlPattern.Iso then
+                            ControlPattern.Sae
+                        else
+                            ControlPattern.Iso }
+
+            Settings.save settings
+
+        patternToggleLatch <- pKey
+
         let machineInput =
             if flyMode then
                 InputFrame.empty
             else
-                { InputFrame.empty with
-                    Swing = axis Key.A Key.D
-                    Stick = axis Key.W Key.S // W = stick out (negative is crowd)
-                    Boom = axis Key.K Key.I + axis Key.Down Key.Up
-                    Bucket = axis Key.J Key.L
-                    LeftTrack = axis Key.E Key.Q
-                    RightTrack = axis Key.C Key.Z }
+                let keyboardFrame =
+                    { InputFrame.empty with
+                        Swing = axis Key.A Key.D
+                        Stick = axis Key.S Key.W // W = stick out (extend away)
+                        Boom = axis Key.K Key.I + axis Key.Down Key.Up
+                        Bucket = axis Key.J Key.L
+                        LeftTrack = axis Key.E Key.Q
+                        RightTrack = axis Key.C Key.Z }
+
+                if input.Gamepads.Count > 0 then
+                    let pad = input.Gamepads.[0]
+
+                    let dead (value: float32) =
+                        if MathF.Abs value < settings.GamepadDeadzone then 0.0f else value
+
+                    let leftX = dead pad.Thumbsticks.[0].X
+                    let leftY = dead pad.Thumbsticks.[0].Y
+                    let rightX = dead pad.Thumbsticks.[1].X
+                    let rightY = dead pad.Thumbsticks.[1].Y
+
+                    // Shared axes: left-X swing, right-X bucket. ISO: left-Y
+                    // stick / right-Y boom; SAE swaps the Y axes.
+                    let stickY, boomY =
+                        if settings.ControlPattern = ControlPattern.Iso then
+                            leftY, rightY
+                        else
+                            rightY, leftY
+
+                    // Triggers drive tracks forward, bumpers reverse.
+                    let trigger (value: float32) = MathF.Max(value, 0.0f)
+
+                    let trackLeft =
+                        trigger pad.Triggers.[0].Position
+                        - (if pad.Buttons.[int ButtonName.LeftBumper].Pressed then 1.0f else 0.0f)
+
+                    let trackRight =
+                        trigger pad.Triggers.[1].Position
+                        - (if pad.Buttons.[int ButtonName.RightBumper].Pressed then 1.0f else 0.0f)
+
+                    { keyboardFrame with
+                        Swing = keyboardFrame.Swing + leftX
+                        Stick = keyboardFrame.Stick + stickY
+                        Boom = keyboardFrame.Boom - boomY
+                        Bucket = keyboardFrame.Bucket + rightX
+                        LeftTrack = keyboardFrame.LeftTrack + trackLeft
+                        RightTrack = keyboardFrame.RightTrack + trackRight }
+                else
+                    keyboardFrame
 
         // Fixed-step sim.
         accumulator <- min 0.25 (accumulator + elapsed)
@@ -244,6 +314,10 @@ let main args =
             inputSequence <- inputSequence + 1L
 
             world.Step { machineInput with Sequence = inputSequence } |> ignore
+
+            match audio with
+            | Some system -> system.Update(world.Machine, world.Events, float32 fixedStep)
+            | None -> ()
 
             let swap = previous
             previous <- current
@@ -269,6 +343,67 @@ let main args =
         renderer.RebuildDirtyTiles 8
         let alpha = float32 (accumulator / fixedStep)
         renderer.Draw(view * projection, cameraPosition, previous, current, alpha, brushHit, brushRadius)
+
+        // HUD overlay.
+        let uiScale = MathF.Max(float32 size.Y / 600.0f, 1.5f)
+        let white = Vector4(0.95f, 0.95f, 0.92f, 0.9f)
+        let orange = Vector4(0.95f, 0.55f, 0.1f, 0.95f)
+        let red = Vector4(0.95f, 0.2f, 0.15f, 0.95f)
+        hud.Begin(size.X, size.Y)
+
+        match world.Machine with
+        | Some m ->
+            let margin = 10.0f * uiScale
+            let line = 11.0f * uiScale
+            hud.Text(margin, margin, uiScale, white, $"PAYLOAD %.0f{m.BucketLoadKg} KG")
+
+            hud.Bar(
+                margin,
+                margin + line,
+                70.0f * uiScale,
+                5.0f * uiScale,
+                float32 (m.BucketLoadKg / Tuning.BucketCapacityKg),
+                orange
+            )
+
+            // Circuit saturation: a full bar = that pump is maxed out, which
+            // is exactly when everything on it slows down.
+            let circuitOf = [| 0; 1; 0; 2; 0; 1 |]
+
+            for circuit in 0..2 do
+                let mutable saturation = 0.0f
+
+                for f in 0..5 do
+                    if circuitOf.[f] = circuit then
+                        saturation <- MathF.Max(saturation, 1.0f - m.GrantedScale f)
+
+                let y = margin + line * (2.5f + float32 circuit)
+                hud.Text(margin, y, uiScale * 0.8f, white, $"P%d{circuit + 1}")
+                hud.Bar(margin + 18.0f * uiScale, y, 50.0f * uiScale, 4.0f * uiScale, saturation, orange)
+
+            let tiltDegrees = m.ChassisTilt * 57.3f
+
+            hud.Text(
+                margin,
+                margin + line * 6.0f,
+                uiScale * 0.8f,
+                (if tiltDegrees > 11.0f then red else white),
+                $"TILT %.0f{tiltDegrees}"
+            )
+
+            if m.StallActive && (world.Tick / 15L) % 2L = 0L then
+                hud.Text(margin, margin + line * 7.2f, uiScale, red, "STALL")
+        | None -> ()
+
+        let hint =
+            if flyMode then
+                "FLY  WASD MOVE  LMB DIG  G DUMP  F1 OPERATE"
+            else
+                let pattern = if settings.ControlPattern = ControlPattern.Iso then "ISO" else "SAE"
+                $"{pattern}  AD SWING  WS STICK  IK BOOM  JL BUCKET  QE ZC TRACKS  P PATTERN  F1 FLY"
+
+        hud.Text(10.0f * uiScale, float32 size.Y - 12.0f * uiScale, uiScale * 0.7f, white, hint)
+        hud.End()
 
         // Title-bar stats (a real HUD arrives in Phase 5).
         statFrames <- statFrames + 1
