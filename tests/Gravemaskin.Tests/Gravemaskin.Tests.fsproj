@@ -17,7 +17,9 @@
     <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="TestKit.fs" />
     <Compile Include="CoreTests.fs" />
+    <Compile Include="SoilTests.fs" />
     <Compile Include="DeterminismTests.fs" />
+    <Compile Include="SoilDeterminismTests.fs" />
     <Compile Include="AllocationTests.fs" />
   </ItemGroup>
 </Project>

@@ -5,6 +5,12 @@
     <Compile Include="Domain.fs" />
     <Compile Include="Tuning.fs" />
     <Compile Include="Bepu.fs" />
+    <Compile Include="Soil/Volume.fs" />
+    <Compile Include="Soil/Carve.fs" />
+    <Compile Include="Soil/Settle.fs" />
+    <Compile Include="Soil/Particles.fs" />
+    <Compile Include="Soil/Collision.fs" />
+    <Compile Include="Soil/Api.fs" />
     <Compile Include="Physics.fs" />
     <Compile Include="Sim.fs" />
   </ItemGroup>

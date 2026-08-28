@@ -67,3 +67,8 @@ smoke: _sdk
 # Pre-commit gate.
 [group('test')]
 check: lint build test smoke
+
+# Release-build perf gate: the strict tick-budget numbers.
+[group('test')]
+perf: _sdk
+    {{ dotnet }} test {{ tests }} -c Release --nologo --filter "FullyQualifiedName~budget"

@@ -26,7 +26,56 @@ type Physics(threadCount: int) =
             SolveDescription(Tuning.SolverVelocityIterations, Tuning.SolverSubsteps)
         )
 
+    do
+        // Same-machine replay/regression determinism with the multithreaded
+        // dispatcher: without this, contact/constraint add ordering diverges
+        // between identical runs once bodies churn (verified empirically —
+        // clump counts differed run-to-run until this was set).
+        simulation.Deterministic <- true
+
+    // Soil tile statics: handle + shape per tile, swapped when terrain changes.
+    let mutable tileStatics: StaticHandle[] = Array.empty
+    let mutable tileShapes: Collidables.TypedIndex[] = Array.empty
+    let mutable tilesLive: bool[] = Array.empty
+
     member _.Simulation = simulation
+    member _.Pool = pool
+
+    /// (Re)build the collision mesh for one soil tile, disposing the old one.
+    /// Deterministic: called at fixed points in Step, in tile-index order.
+    member _.SwapTileMesh(state: SoilState, tile: int) =
+        if tileStatics.Length = 0 then
+            tileStatics <- Array.zeroCreate (state.TilesX * state.TilesZ)
+            tileShapes <- Array.zeroCreate (state.TilesX * state.TilesZ)
+            tilesLive <- Array.zeroCreate (state.TilesX * state.TilesZ)
+
+        if tilesLive.[tile] then
+            simulation.Statics.Remove(tileStatics.[tile])
+            simulation.Shapes.RecursivelyRemoveAndDispose(tileShapes.[tile], pool)
+
+        let mutable mesh =
+            SoilCollision.buildTileMesh state pool (tile % state.TilesX) (tile / state.TilesX)
+
+        let shape = simulation.Shapes.Add(&mesh)
+        let desc = StaticDescription(Vector3.Zero, shape)
+        tileStatics.[tile] <- simulation.Statics.Add(&desc)
+        tileShapes.[tile] <- shape
+        tilesLive.[tile] <- true
+
+    /// Swap up to `budget` dirty tiles this tick, lowest tile index first.
+    member this.SwapDirtyTiles(state: SoilState, budget: int) =
+        let mutable swapped = 0
+        let mutable tile = 0
+
+        while swapped < budget && tile < state.DirtyMesh.Length do
+            if state.DirtyMesh.[tile] then
+                state.DirtyMesh.[tile] <- false
+                this.SwapTileMesh(state, tile)
+                swapped <- swapped + 1
+
+            tile <- tile + 1
+
+        swapped
 
     member _.Step() =
         if isNull (box dispatcher) then
