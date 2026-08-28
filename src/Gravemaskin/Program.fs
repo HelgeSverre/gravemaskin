@@ -277,8 +277,13 @@ let main args =
         if statTime >= 0.5 then
             let fps = float statFrames / statTime
 
+            let payload =
+                match world.Machine with
+                | Some m -> $" · payload {m.BucketLoadKg:F0} kg" + (if m.StallActive then " · STALL" else "")
+                | None -> ""
+
             window.Title <-
-                $"GRAVEMASKIN — {fps:F0} fps · tick {world.Tick} · clumps {world.Clumps.Count} · AD swing WS stick IK boom JL bucket QE/ZC tracks · F1 fly/brush"
+                $"GRAVEMASKIN — {fps:F0} fps · clumps {world.Clumps.Count}{payload} · AD swing WS stick IK boom JL bucket QE/ZC tracks · F1 fly/brush"
 
             statFrames <- 0
             statTime <- 0.0

@@ -145,6 +145,25 @@ module Tuning =
     /// max reach used in stall tests.
     let u17BucketTipRadius = 0.7f
 
+    /// FEE calibration knobs (see Excavator/Fee.fs — folded N-factors).
+    /// Expect hand-tuning; that is their job.
+    let FeeGammaFactor = 6.0f
+    let FeeCohesionFactor = 5.0f
+    /// Low-pass on the dig resistance (per-tick lerp) so force never pops
+    /// crossing cell boundaries.
+    let FeeSmoothing = 0.25f
+    /// Cutting geometry: effective blade width and carve radius per tick.
+    let CutWidth = 0.6f
+    let CutRadius = 0.28f
+    /// Minimum edge speed (m/s) that counts as cutting.
+    let CutMinSpeed = 0.12f
+    /// U17 bucket payload ceiling (kg, loose) — ~0.05 m³ heaped.
+    let BucketCapacityKg = 70.0
+    /// Dump release rate (kg per tick) once the bucket opens.
+    let DumpRatePerTick = 4.0
+    /// Bucket angle above which the load pours out.
+    let DumpAngle = -0.35f
+
     /// Input shaping (applied inside the sim for determinism):
     /// deadband → power curve → first-order valve lag.
     let InputDeadband = 0.10f

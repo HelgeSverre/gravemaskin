@@ -21,6 +21,7 @@
     <Compile Include="DeterminismTests.fs" />
     <Compile Include="SoilDeterminismTests.fs" />
     <Compile Include="MachineTests.fs" />
+    <Compile Include="DigTests.fs" />
     <Compile Include="AllocationTests.fs" />
   </ItemGroup>
 </Project>

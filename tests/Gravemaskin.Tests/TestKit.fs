@@ -45,6 +45,13 @@ module TestKit =
         | Some state ->
             let totals = Soil.massTotals state
             world.Clumps.AddMassTotals totals
+
+            // Payload in the bucket is mass in flight, not mass lost.
+            match world.Machine with
+            | Some m ->
+                for i in 0..4 do
+                    totals.[i] <- totals.[i] + m.BucketLoad.[i]
+            | None -> ()
             let mutable worst = 0.0
 
             for i in 0 .. totals.Length - 1 do

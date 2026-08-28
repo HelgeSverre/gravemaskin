@@ -36,8 +36,10 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
     let stick =
         Bepu.addDynamicBox simulation stickCenter (Vector3(1.1f, 0.14f, 0.12f)) Tuning.u17Masses.Stick
 
-    // ponytail: single-box bucket; the open compound (back+sides+bottom
-    // plates) arrives with Phase 4 bucket-fill, which is what needs it.
+    // ponytail: single-box bucket (the open-plate compound is deferred —
+    // the load-scalar payload made it unnecessary for bucket-fill). Note the
+    // computed cutting edge extends ~0.15 m beyond this box: the edge point
+    // carves/measures, the box collides.
     let bucket =
         Bepu.addDynamicBox simulation bucketCenter (Vector3(0.5f, 0.4f, 0.6f)) Tuning.u17Masses.Bucket
 
@@ -90,6 +92,9 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
     // tuples are heap objects and this is the tick path.
     let lastVelocity = Array.create 4 0.0f
     let lastCap = Array.create 4 -1.0f
+    // Payload (kg per material) + inertia change-guard.
+    let bucketLoad = Array.zeroCreate<float> 5
+    let mutable lastInertiaMass = 0.0f
 
     let joints =
         [| Tuning.u17BoomJoint; Tuning.u17StickJoint; Tuning.u17BucketJoint |]
@@ -152,6 +157,89 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
     /// Granted flow scale for a function this tick (1 = full speed): the
     /// flow-sharing observable, surfaced for tests and the HUD.
     member _.GrantedScale(functionIndex: int) = grantedScale.[functionIndex]
+
+    /// Payload in the bucket, kg per material (the load scalar: resting soil
+    /// converts to bucket mass ASAP — it costs no clump budget and routes
+    /// weight into COM, tipping, and hydraulic load exactly as it should).
+    member _.BucketLoad = bucketLoad
+
+    member _.BucketLoadKg = Array.sum bucketLoad
+
+    /// Absorb up to the remaining capacity; returns what was taken (kg).
+    member _.TryAbsorb(mass: float, materialIndex: int) =
+        let space = Tuning.BucketCapacityKg - Array.sum bucketLoad
+
+        if space <= 0.0 then
+            0.0
+        else
+            let taken = min mass space
+            bucketLoad.[materialIndex] <- bucketLoad.[materialIndex] + taken
+            taken
+
+    /// Pour out one tick's worth of load if the bucket is open enough.
+    /// Returns (kg, materialIndex) released, or ValueNone.
+    member this.DumpTick() =
+        if this.BucketAngle > Tuning.DumpAngle && Array.sum bucketLoad > 1e-6 then
+            // Release the heaviest material first (close enough to pouring).
+            let mutable best = 0
+
+            for i in 1..4 do
+                if bucketLoad.[i] > bucketLoad.[best] then
+                    best <- i
+
+            let released = min Tuning.DumpRatePerTick bucketLoad.[best]
+            bucketLoad.[best] <- bucketLoad.[best] - released
+            ValueSome(struct (released, best))
+        else
+            ValueNone
+
+    /// Push the payload mass into the bucket body's inertia (change-guarded).
+    member _.RefreshLoadInertia() =
+        let total = float32 (Array.sum bucketLoad)
+
+        if MathF.Abs(total - lastInertiaMass) > 4.0f then
+            lastInertiaMass <- total
+            let shape = BepuPhysics.Collidables.Box(0.5f, 0.4f, 0.6f)
+            let inertia = shape.ComputeInertia(Tuning.u17Masses.Bucket + total)
+            let mutable bucketRef = simulation.Bodies.[bucket]
+
+            if not bucketRef.Awake then
+                bucketRef.Awake <- true
+
+            bucketRef.LocalInertia <- inertia
+
+    /// World-space velocity of the cutting edge.
+    member this.CuttingEdgeVelocity =
+        let bucketRef = simulation.Bodies.[bucket]
+        let offset = this.BucketTipPosition - bucketRef.Pose.Position
+        bucketRef.Velocity.Linear + Vector3.Cross(bucketRef.Velocity.Angular, offset)
+
+    /// True when some cylinder is commanded hard but barely moving — the
+    /// relief-valve squeal observable.
+    member _.StallActive =
+        let mutable stalled = false
+
+        for i in 0..2 do
+            if MathF.Abs laggedAxes.[i] > 0.4f then
+                let parentRef = simulation.Bodies.[jointParents.[i]]
+                let childRef = simulation.Bodies.[jointChildren.[i]]
+
+                let axisWorld = Vector3.Transform(motorAxes.[i], parentRef.Pose.Orientation)
+
+                let relative =
+                    Vector3.Dot(childRef.Velocity.Angular - parentRef.Velocity.Angular, axisWorld)
+
+                let angle = jointAngle jointParents.[i] jointChildren.[i] motorAxes.[i]
+                let joint = joints.[i]
+
+                let atLimit =
+                    (angle >= joint.MaxAngle - 0.05f && laggedAxes.[i] > 0.0f)
+                    || (angle <= joint.MinAngle + 0.05f && laggedAxes.[i] < 0.0f)
+
+                if not atLimit && MathF.Abs relative < 0.03f then
+                    stalled <- true
+
+        stalled
 
     /// Drive the machine one tick. Axes in `input` are raw -1..1; shaping
     /// (deadband → curve → valve lag) happens here so replays stay identical.

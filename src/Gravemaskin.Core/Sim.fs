@@ -29,6 +29,8 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
 
     let clumps = ClumpPool()
     let mutable machine: Machine option = None
+    // Low-passed FEE resistance (force never pops across cell boundaries).
+    let mutable feeForce = Vector3.Zero
 
     let surfaceHeight (x: float32) (z: float32) =
         match soilState with
@@ -46,9 +48,11 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
         | None -> ()
 
     /// Collision-mesh swaps allowed per tick once running. Each swap builds
-    /// a fresh BVH for a 2048-triangle tile (~ms); two per tick keeps p99
+    /// a fresh BVH for a 2048-triangle tile (~ms); one per tick keeps p99
     /// inside budget while a dig trail still refreshes within a few ticks.
-    static member val MeshSwapBudget = 2 with get
+    /// ponytail: swap-cost ceiling — if refresh latency ever bites, go to
+    /// 16³ tiles or Tree.RefitAndRefine for height-only changes.
+    static member val MeshSwapBudget = 1 with get
 
     member _.Physics = physics
     member _.Tick = tick
@@ -121,13 +125,114 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
 
             total
 
-    member _.Step(input: InputFrame) : RenderState =
+    /// Spawn one clump, banking the mass instead if the pool is full.
+    member private _.SpawnClump(position: Vector3, velocity: Vector3, mass: float, material: SoilMaterial) =
+        match soilState with
+        | Some state ->
+            if clumps.TrySpawn(physics.Simulation, position, mass, material) then
+                // Give it the bucket's velocity so pours look like pours.
+                let handle = clumps.Handles.[clumps.Count - 1]
+                let mutable bodyRef = physics.Simulation.Bodies.[handle]
+                bodyRef.Velocity.Linear <- velocity
+            else
+                Soil.deposit state position mass material
+        | None -> ()
+
+    /// The dig system: bucket cutting edge vs the soil volume. Carve where
+    /// the moving edge is below the surface, absorb into the payload, resist
+    /// via FEE, pour out when the bucket opens.
+    member private this.DigTick() =
+        match machine, soilState with
+        | Some m, Some state ->
+            let edge = m.BucketTipPosition
+            let edgeVelocity = m.CuttingEdgeVelocity
+            let surface = Soil.surfaceHeight state edge.X edge.Z
+            let depth = surface - edge.Y
+            let speed = edgeVelocity.Length()
+            let mutable targetForce = Vector3.Zero
+
+            if depth > 0.02f && speed > Tuning.CutMinSpeed then
+                // Peek the material where the edge cuts (for FEE), then carve.
+                let config = state.Config
+                let cx = int (edge.X / config.CellSize) |> max 0 |> min (config.CellsX - 1)
+                let cz = int (edge.Z / config.CellSize) |> max 0 |> min (config.CellsZ - 1)
+                let cy = int (edge.Y / config.CellSize) |> max 0 |> min (config.CellsY - 1)
+                let index = state.Index(cx, cy, cz)
+                let matByte = state.Material.[index]
+                let compByte = state.Compaction.[index]
+                let props = Tuning.soil (Volume.materialOfByte matByte)
+
+                let removed = Soil.carveSphere state edge Tuning.CutRadius carveScratch
+
+                if removed > 0.0 then
+                    events.Add DigStarted
+
+                    for materialIndex in 0..4 do
+                        if carveScratch.[materialIndex] > 0.0 then
+                            let absorbed = m.TryAbsorb(carveScratch.[materialIndex], materialIndex)
+                            let spill = carveScratch.[materialIndex] - absorbed
+
+                            if spill > 0.001 then
+                                // Overflow spills over the bucket as clumps.
+                                let jitter =
+                                    Vector3(
+                                        (Rng.nextFloat32 &rng - 0.5f) * 0.4f,
+                                        0.3f + Rng.nextFloat32 &rng * 0.2f,
+                                        (Rng.nextFloat32 &rng - 0.5f) * 0.4f
+                                    )
+
+                                this.SpawnClump(
+                                    Vector3(edge.X, max surface (edge.Y + Tuning.CutRadius), edge.Z) + jitter,
+                                    Vector3.Zero,
+                                    spill,
+                                    Volume.materialOfByte (byte materialIndex)
+                                )
+
+                // FEE resistance opposing the cut direction.
+                let magnitude = Fee.resistance props compByte depth Tuning.CutWidth
+                targetForce <- -Vector3.Normalize edgeVelocity * magnitude
+
+            feeForce <- Vector3.Lerp(feeForce, targetForce, Tuning.FeeSmoothing)
+
+            if feeForce.LengthSquared() > 1.0f then
+                let mutable bucketRef = physics.Simulation.Bodies.[m.Bucket]
+
+                if not bucketRef.Awake then
+                    bucketRef.Awake <- true
+
+                bucketRef.ApplyImpulse(feeForce * Tuning.FixedDt, edge - bucketRef.Pose.Position)
+
+            // Pour the payload out of an open bucket.
+            match m.DumpTick() with
+            | ValueSome(released, materialIndex) ->
+                events.Add(SoilDumped(float32 released))
+
+                this.SpawnClump(
+                    edge + Vector3(0.0f, -0.1f, 0.0f),
+                    edgeVelocity,
+                    released,
+                    Volume.materialOfByte (byte materialIndex)
+                )
+            | ValueNone -> ()
+
+            m.RefreshLoadInertia()
+        | _ -> ()
+
+    member this.Step(input: InputFrame) : RenderState =
         events.Clear()
 
         match machine with
-        | Some m -> m.Step(input, Tuning.FixedDt, surfaceHeight)
+        | Some m ->
+            m.Step(input, Tuning.FixedDt, surfaceHeight)
+
+            if m.StallActive then
+                events.Add HydraulicStall
+
+            if m.ChassisTilt > 0.20f then
+                events.Add TipWarning
         | None -> ()
 
+        this.DigTick()
         physics.Step()
 
         match soilState with
