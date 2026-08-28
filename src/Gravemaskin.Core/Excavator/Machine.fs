@@ -304,22 +304,40 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
             let angle = jointAngle jointParents.[i] jointChildren.[i] motorAxes.[i]
             let mutable direction = MathF.Sign axis |> float32
 
-            // Software stroke limits: never command past the stop.
+            // Software stroke limits: never command past the stop, and
+            // steer an overshot joint (momentum, external force) back
+            // toward its range instead of leaving it stranded there.
+            // Small deadband so normal dynamics AT a stop don't twitch.
+            let overshoot =
+                if angle > joint.MaxAngle + 0.03f then angle - joint.MaxAngle
+                elif angle < joint.MinAngle - 0.03f then angle - joint.MinAngle
+                else 0.0f
+
             if (angle >= joint.MaxAngle && direction > 0.0f)
                || (angle <= joint.MinAngle && direction < 0.0f) then
                 direction <- 0.0f
 
             let velocity =
-                if direction = 0.0f then
+                if overshoot <> 0.0f then
+                    Math.Clamp(-overshoot * 4.0f, -0.6f, 0.6f)
+                elif direction = 0.0f then
                     0.0f
                 else
                     direction
                     * Linkage.angularVelocity joint angle grantedFlow.[i] direction
 
-            // Holding (axis 0) still gets the full cap: hydraulic check
-            // valves hold a dead stick against gravity.
-            let capDirection = if direction = 0.0f then 1.0f else direction
-            let cap = Linkage.torqueCap joint angle capDirection (relief joint.Circuit)
+            // Holding (axis 0): check valves hold whichever chamber the
+            // load presses on, so the holding cap is the STRONGER of the
+            // two (using the extend chamber unconditionally under-held some
+            // joints and over-held others — review finding).
+            let cap =
+                if direction = 0.0f then
+                    max
+                        (Linkage.torqueCap joint angle 1.0f (relief joint.Circuit))
+                        (Linkage.torqueCap joint angle -1.0f (relief joint.Circuit))
+                else
+                    Linkage.torqueCap joint angle direction (relief joint.Circuit)
+
             retune i motors.[i] motorAxes.[i] velocity cap
 
         // 4. Swing (plain motor with its own relief-ish cap + brake).

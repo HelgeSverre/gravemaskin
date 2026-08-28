@@ -75,7 +75,9 @@ let ``boom torque ceiling emerges from pressure × area × moment arm`` () =
         let world, machine = machineWorld ()
         use _ = world
 
-        for _ in 1..300 do
+        // 450 ticks: the limit-restoring stick motor (a later fix) reacts
+        // through the linkage and slows the boom's early rise a little.
+        for _ in 1..450 do
             let mutable boomRef = world.Physics.Simulation.Bodies.[machine.Boom]
 
             if not boomRef.Awake then

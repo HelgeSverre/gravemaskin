@@ -138,7 +138,7 @@ let ``track passes compact loose spoil: lower, denser, mass conserved`` () =
     Assert.True(TestKit.conservationError world < 1e-6, $"error {TestKit.conservationError world}")
 
 [<Fact>]
-let ``buried rocks surface when dug free and clank when struck`` () =
+let ``buried rocks convert to dynamic bodies and drop when dug free`` () =
     use world = TestKit.soilWorld Topsoil
     world.SeedRocks 12
     Assert.True(world.Rocks.Count > 0, "some rocks should seed")
@@ -153,8 +153,14 @@ let ``buried rocks surface when dug free and clank when struck`` () =
 
         world.Step InputFrame.empty |> ignore
 
-    // The rock must have become dynamic (exposed) and must not have fallen
-    // out of the world; soil conservation is untouched by rocks.
-    let after = world.Physics.Simulation.Bodies.[world.Rocks.[0]].Pose.Position
-    Assert.True(after.Y > -5.0f, $"exposed rock should rest, not vanish: y {after.Y}")
+    // The rock must actually have converted (kinematic bodies have
+    // InverseMass 0), actually have dropped into the crater, and not have
+    // fallen out of the world. (The first version of this test asserted
+    // none of that and passed with the exposure code deleted — review
+    // finding.)
+    let bodyRef = world.Physics.Simulation.Bodies.[world.Rocks.[0]]
+    Assert.True(bodyRef.LocalInertia.InverseMass > 0.0f, "dug-free rock should be dynamic")
+    let after = bodyRef.Pose.Position
+    Assert.True(after.Y < rockPosition.Y - 0.05f, $"freed rock should drop: {rockPosition.Y} -> {after.Y}")
+    Assert.True(after.Y > -5.0f, $"but rest in the crater, not vanish: y {after.Y}")
     Assert.True(TestKit.conservationError world < 1e-6)

@@ -46,6 +46,11 @@ module Soil =
 
         deposit state position mass mat
 
+    /// Bank a small mass directly into the quantization residual (used for
+    /// amounts too small to be worth a clump — never dropped).
+    let creditUnbanked (state: SoilState) (materialIndex: int) (mass: float) =
+        state.Unbanked.[materialIndex] <- state.Unbanked.[materialIndex] + mass
+
     /// Budgeted settling for this tick; cohesive wall failures are recorded
     /// into `failures` for the caller to turn into clumps.
     let settleTick (state: SoilState) (failures: ResizeArray<WallFailure>) =

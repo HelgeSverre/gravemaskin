@@ -85,7 +85,7 @@ let ``deep wet sand stalls the stick while the swing keeps moving`` () =
     TestKit.stepAll 140 (inp -1.0f 0.0f 0.0f 0.0f) world |> ignore
 
     let mutable stallSeen = false
-    let swingBefore = machine.SwingAngle
+    let stickBefore = machine.StickAngle
 
     for _ in 1..300 do
         world.Step(inp 0.0f -1.0f 0.0f 0.3f) |> ignore
@@ -94,11 +94,14 @@ let ``deep wet sand stalls the stick while the swing keeps moving`` () =
             stallSeen <- true
 
     Assert.True(stallSeen, "deep cohesive cut should stall a cylinder at some point")
-    ignore swingBefore
 
-    // Flow independence, not mechanical independence: a buried arm really
-    // does anchor the swing, but the stick's saturated circuit must never
-    // starve the swing's own circuit of flow.
+    // The stick specifically is what's stuck: 5 s of full crowd command in
+    // free air covers ~2 rad; in the cut it barely creeps.
+    let stickMoved = abs (machine.StickAngle - stickBefore)
+    Assert.True(stickMoved < 0.5f, $"the stick should be pinned by the cut: moved {stickMoved}")
+
+    // Flow independence (not mechanical — a buried arm really does anchor
+    // the swing): the saturated dig circuit never starves the swing's own.
     Assert.Equal(1.0f, machine.GrantedScale Hydraulics.Swing)
 
 [<Fact>]
@@ -126,6 +129,47 @@ let ``digging under the machine's own tracks drops it onto the new surface`` () 
     Assert.True(after.Y > surface - 0.5f, $"but never fall through: y {after.Y} vs surface {surface}")
     Assert.True(TestKit.conservationError world < 1e-6)
 
+/// The gameplay pipeline end to end: machine + soil + FEE + payload +
+/// compaction + rocks, hashed. This is the determinism claim's real gate —
+/// pose-only and soil-only sessions each miss half the system.
+let private runMachineDigSession (ticks: int) =
+    let world = TestKit.soilWorld Topsoil
+    let machine = world.SpawnMachine(Vector3(8.0f, 0.0f, 8.0f))
+    world.SeedRocks 6
+    use _ = world
+    ignore machine
+
+    for tick in 0 .. ticks - 1 do
+        let frame =
+            match (tick / 90) % 5 with
+            | 0 -> inp 0.0f 0.0f -1.0f 0.0f
+            | 1 -> inp -1.0f 0.0f -0.4f 0.0f
+            | 2 -> inp 0.0f -1.0f -0.6f 0.0f
+            | 3 -> inp 1.0f 0.0f 1.0f 0.6f
+            | _ ->
+                { inp 0.0f 0.0f 0.0f 0.0f with
+                    LeftTrack = 1.0f
+                    RightTrack = -0.5f }
+
+        world.Step { frame with Sequence = int64 tick } |> ignore
+
+    struct (world.Physics.HashBodyPoses(), TestKit.hashSoil world)
+
+[<Fact>]
+let ``1k machine-digging ticks: poses AND soil bit-identical across runs`` () =
+    let struct (poses1, soil1) = runMachineDigSession 1_000
+    let struct (poses2, soil2) = runMachineDigSession 1_000
+    Assert.Equal(poses1, poses2)
+    Assert.Equal(soil1, soil2)
+
+[<Fact>]
+[<Trait("Category", "Integration")>]
+let ``10k machine-digging ticks: poses AND soil bit-identical across runs`` () =
+    let struct (poses1, soil1) = runMachineDigSession 10_000
+    let struct (poses2, soil2) = runMachineDigSession 10_000
+    Assert.Equal(poses1, poses2)
+    Assert.Equal(soil1, soil2)
+
 [<Fact>]
 let ``digging a loaded world still allocates nothing`` () =
     let world, _ = digWorld Topsoil
@@ -136,6 +180,9 @@ let ``digging a loaded world still allocates nothing`` () =
     GC.WaitForPendingFinalizers()
     GC.Collect()
     let gen0 = GC.CollectionCount 0
+    // CollectionCount alone lets sub-budget leaks hide for years (review
+    // finding: a 24 B/tick closure passed every gate). Measure actual bytes.
+    let bytesBefore = GC.GetAllocatedBytesForCurrentThread()
 
     for tick in 0..599 do
         let phase = (tick / 100) % 4
@@ -149,4 +196,10 @@ let ``digging a loaded world still allocates nothing`` () =
 
         world.Step frame |> ignore
 
+    let allocated = GC.GetAllocatedBytesForCurrentThread() - bytesBefore
     Assert.Equal(gen0, GC.CollectionCount 0)
+
+    // Byte-exact gate only in Release: Debug F# codegen allocates closures
+    // the optimizer removes. `just perf` runs this in Release.
+    if TestKit.isReleaseBuild then
+        Assert.True(allocated < 2048L, $"steady-state digging allocated {allocated} bytes over 600 ticks")

@@ -50,6 +50,10 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
         | Some state -> Soil.surfaceHeight state x z
         | None -> 0.0f
 
+    // Bound ONCE: passing the let-bound function directly to Machine.Step
+    // materialized a fresh closure every tick (24 B/tick — review finding).
+    let surfaceHeightF: float32 -> float32 -> float32 = surfaceHeight
+
     do
         // Initial collision build: every tile, synchronously, before tick 0.
         match soilState with
@@ -190,6 +194,12 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                         if carveScratch.[materialIndex] > 0.0 then
                             let absorbed = m.TryAbsorb(carveScratch.[materialIndex], materialIndex)
                             let spill = carveScratch.[materialIndex] - absorbed
+
+                            // Sub-clump spill still exists: bank it in the
+                            // residual rather than destroying it (the only
+                            // path that ever leaked mass — review finding).
+                            if spill > 0.0 && spill <= 0.001 then
+                                Soil.creditUnbanked state materialIndex spill
 
                             if spill > 0.001 then
                                 // Overflow spills over the bucket as clumps.
@@ -437,7 +447,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
         match machine with
         | Some m ->
-            m.Step(input, Tuning.FixedDt, surfaceHeight)
+            m.Step(input, Tuning.FixedDt, surfaceHeightF)
 
             if m.StallActive then
                 events.Add HydraulicStall

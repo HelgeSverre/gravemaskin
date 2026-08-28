@@ -289,14 +289,24 @@ let main args =
         let f9 = keyboard.IsKeyPressed Key.F9
 
         if f9 && not loadLatch && IO.File.Exists(savePath ()) then
-            (world :> IDisposable).Dispose()
-            world <- Sim.loadWorld 0xD16D16UL (savePath ())
-            state <- world.SoilState.Value
-            // ponytail: the old renderer's GL objects leak on load — a few
-            // hundred KB per load, cleanup when it ever matters.
-            renderer <- Renderer(gl, state)
-            world.SnapshotInto previous
-            world.SnapshotInto current
+            // Parse FIRST: a corrupt save must not take the live world with
+            // it (review finding: dispose-then-parse crashed on bad files).
+            match
+                (try
+                    Some(Sim.loadWorld 0xD16D16UL (savePath ()))
+                 with _ ->
+                     None)
+            with
+            | Some loadedWorld ->
+                (world :> IDisposable).Dispose()
+                world <- loadedWorld
+                state <- world.SoilState.Value
+                // ponytail: the old renderer's GL objects leak on load — a
+                // few hundred KB per load, cleanup when it ever matters.
+                renderer <- Renderer(gl, state)
+                world.SnapshotInto previous
+                world.SnapshotInto current
+            | None -> ()
 
         loadLatch <- f9
 
@@ -373,8 +383,10 @@ let main args =
         accumulator <- min 0.25 (accumulator + elapsed)
 
         while accumulator >= fixedStep do
-            // Dig/dump under the brush while held (one op per tick).
-            match brushHit with
+            // Dig/dump under the brush while held (one op per tick). Never
+            // during replay: brush edits are live, unrecorded input and
+            // would fork the reproduction (review finding).
+            match (if replayFrames.IsSome then ValueNone else brushHit) with
             | ValueSome hit when mouse.IsButtonPressed MouseButton.Left ->
                 world.CarveSphere(hit, brushRadius) |> ignore
             | ValueSome hit when keyboard.IsKeyPressed Key.G ->
@@ -517,8 +529,6 @@ let main args =
 
         match maxFrames with
         | Some limit when frameCount >= int64 limit ->
-            recordWriter |> Option.iter (fun writer -> writer.Dispose())
-
             match screenshotPath with
             | Some path ->
                 screenshot gl size.X size.Y path
@@ -533,6 +543,8 @@ let main args =
 
             window.Close()
         | _ -> ())
+
+    window.add_Closing (fun () -> recordWriter |> Option.iter (fun writer -> writer.Dispose()))
 
     window.Run()
     0
