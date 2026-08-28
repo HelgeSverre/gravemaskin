@@ -1,6 +1,6 @@
 core := "src/Gravemaskin.Core/Gravemaskin.Core.fsproj"
 tests := "tests/Gravemaskin.Tests/Gravemaskin.Tests.fsproj"
-solution := "Gravemaskin.sln"
+solution := "Gravemaskin.slnx"
 dotnet := "PATH=\"$PWD/.dotnet:$PATH\" dotnet"
 
 [private]

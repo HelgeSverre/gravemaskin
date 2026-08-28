@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Compile Include="Prelude.fs" />
+    <Compile Include="Noise.fs" />
+    <Compile Include="Domain.fs" />
+    <Compile Include="Tuning.fs" />
+    <Compile Include="Bepu.fs" />
+    <Compile Include="Physics.fs" />
+    <Compile Include="Sim.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="BepuPhysics" Version="2.5.0-beta.29" />
+  </ItemGroup>
+</Project>

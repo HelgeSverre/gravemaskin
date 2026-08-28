@@ -18,10 +18,10 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - name: Restore
-        run: dotnet restore Gravemaskin.sln
+        run: dotnet restore Gravemaskin.slnx
       - name: Lint
-        run: dotnet format Gravemaskin.sln --verify-no-changes --no-restore
+        run: dotnet format Gravemaskin.slnx --verify-no-changes --no-restore
       - name: Build
-        run: dotnet build Gravemaskin.sln --no-restore
+        run: dotnet build Gravemaskin.slnx --no-restore
       - name: Test
         run: dotnet test tests/Gravemaskin.Tests/Gravemaskin.Tests.fsproj --no-build --nologo
