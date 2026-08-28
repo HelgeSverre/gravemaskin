@@ -14,7 +14,10 @@ module Domain =
         | Gravel
         | Clay
 
-    /// Per-material physical description. Instances live in Tuning.SoilTable.
+    /// Per-material physical description. Instances live in Tuning.soil.
+    /// Struct: Tuning.soil is called in per-cell hot loops — a reference
+    /// record would allocate every call.
+    [<Struct>]
     type SoilProperties =
         { /// Bank (undisturbed) unit weight.
           BankDensity: float32<kg/m^3>
