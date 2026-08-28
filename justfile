@@ -1,4 +1,5 @@
 core := "src/Gravemaskin.Core/Gravemaskin.Core.fsproj"
+client := "src/Gravemaskin/Gravemaskin.fsproj"
 tests := "tests/Gravemaskin.Tests/Gravemaskin.Tests.fsproj"
 solution := "Gravemaskin.slnx"
 dotnet := "PATH=\"$PWD/.dotnet:$PATH\" dotnet"
@@ -23,6 +24,16 @@ _sdk:
 [windows]
 _sdk:
     @dotnet --version >nul 2>&1 || echo "No SDK satisfying global.json. Install it with dotnet-install.ps1."
+
+# Run the game.
+[group('run')]
+run: _sdk
+    {{ dotnet }} run --project {{ client }}
+
+# Run N frames headless-ish and write a screenshot (smoke/visual check).
+[group('run')]
+shot path="screenshot.bmp" frames="180": _sdk
+    {{ dotnet }} run --project {{ client }} -- --frames {{ frames }} --screenshot {{ path }}
 
 # Restore dependencies.
 [group('build')]
