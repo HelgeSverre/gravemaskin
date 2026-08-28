@@ -138,6 +138,7 @@ let main args =
         world <- Sim.createSoilWorld 0xD16D16UL Topsoil 2.0f
         state <- world.SoilState.Value
         world.SpawnMachine(Vector3(16.0f, 0.0f, 16.0f)) |> ignore
+        world.SeedRocks 24
         renderer <- Renderer(gl, state)
         hud <- Hud(gl)
 

@@ -154,6 +154,16 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
         bucketRef.Pose.Position
         + Vector3.Transform(Vector3(Tuning.u17BucketTipRadius - 0.30f, -0.2f, 0.0f), bucketRef.Pose.Orientation)
 
+    /// Lagged drive axis for a track side (0 = left, 1 = right).
+    member _.TrackAxis(side: int) =
+        laggedAxes.[if side = 0 then Hydraulics.TrackL else Hydraulics.TrackR]
+
+    /// World-space point under a track's centerline.
+    member _.TrackContactPoint(side: int) =
+        let pose = simulation.Bodies.[chassis].Pose
+        let offsetLocal = Vector3(0.0f, -0.25f, (if side = 0 then -0.55f else 0.55f))
+        pose.Position + Vector3.Transform(offsetLocal, pose.Orientation)
+
     /// Granted flow scale for a function this tick (1 = full speed): the
     /// flow-sharing observable, surfaced for tests and the HUD.
     member _.GrantedScale(functionIndex: int) = grantedScale.[functionIndex]
@@ -200,13 +210,12 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
         if MathF.Abs(total - lastInertiaMass) > 4.0f then
             lastInertiaMass <- total
             let shape = BepuPhysics.Collidables.Box(0.5f, 0.4f, 0.6f)
-            let inertia = shape.ComputeInertia(Tuning.u17Masses.Bucket + total)
+            let mutable inertia = shape.ComputeInertia(Tuning.u17Masses.Bucket + total)
+            simulation.Bodies.SetLocalInertia(bucket, &inertia)
             let mutable bucketRef = simulation.Bodies.[bucket]
 
             if not bucketRef.Awake then
                 bucketRef.Awake <- true
-
-            bucketRef.LocalInertia <- inertia
 
     /// World-space velocity of the cutting edge.
     member this.CuttingEdgeVelocity =

@@ -135,3 +135,6 @@ type RenderSnapshot(capacity: int) =
     member val MachinePartCount = 0 with get, set
     member val MachinePositions = Array.zeroCreate<Vector3> 8
     member val MachineOrientations = Array.zeroCreate<Quaternion> 8
+    member val RockCount = 0 with get, set
+    member val RockPositions = Array.zeroCreate<Vector3> 64
+    member val RockRadii = Array.zeroCreate<float32> 64

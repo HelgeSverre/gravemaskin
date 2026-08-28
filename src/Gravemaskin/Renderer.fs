@@ -129,7 +129,7 @@ type Renderer(gl: GL, state: SoilState) =
     let clodInstanceVbo = gl.GenBuffer()
     // xyz + radius + rgb per instance.
     let instanceFloats = 7
-    let instanceScratch = Array.zeroCreate<float32> ((Clumps.MaxClumps + 1) * instanceFloats)
+    let instanceScratch = Array.zeroCreate<float32> ((Clumps.MaxClumps + 65) * instanceFloats)
 
     let materialColor (mat: byte) =
         match int mat with
@@ -373,6 +373,18 @@ type Renderer(gl: GL, state: SoilState) =
             instanceScratch.[baseIndex + 4] <- color.X
             instanceScratch.[baseIndex + 5] <- color.Y
             instanceScratch.[baseIndex + 6] <- color.Z
+            instances <- instances + 1
+
+        // Rocks: same instancing, boulder grey.
+        for i in 0 .. current.RockCount - 1 do
+            let baseIndex = instances * instanceFloats
+            instanceScratch.[baseIndex] <- current.RockPositions.[i].X
+            instanceScratch.[baseIndex + 1] <- current.RockPositions.[i].Y
+            instanceScratch.[baseIndex + 2] <- current.RockPositions.[i].Z
+            instanceScratch.[baseIndex + 3] <- current.RockRadii.[i]
+            instanceScratch.[baseIndex + 4] <- 0.42f
+            instanceScratch.[baseIndex + 5] <- 0.42f
+            instanceScratch.[baseIndex + 6] <- 0.44f
             instances <- instances + 1
 
         // Brush indicator rides along as one extra instance.

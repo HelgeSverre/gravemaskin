@@ -41,8 +41,10 @@ module Soil =
 
         deposit state position mass mat
 
-    /// Budgeted angle-of-repose relaxation for this tick.
-    let settleTick (state: SoilState) = Settle.tick state |> ignore
+    /// Budgeted settling for this tick; cohesive wall failures are recorded
+    /// into `failures` for the caller to turn into clumps.
+    let settleTick (state: SoilState) (failures: ResizeArray<WallFailure>) =
+        Settle.tick state failures |> ignore
 
     /// Volume mass per material by full scan, plus unbanked residual —
     /// compare against Ledger + live clump mass in tests.

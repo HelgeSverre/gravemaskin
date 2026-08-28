@@ -2,10 +2,22 @@ namespace Gravemaskin
 
 open System
 
-/// Angle-of-repose settling: a budgeted cellular pass over dirty tiles in
-/// index order (deterministic). Loose material (low compaction) flows toward
-/// its material's repose slope; bank material holds (cohesion failure is a
-/// Phase 6 feature).
+/// One recorded cohesive-wall failure: the caller (World) turns it into
+/// tumbling clumps + a WallCollapsed event.
+[<Struct>]
+type WallFailure =
+    { X: int
+      Z: int
+      Units: int
+      MaterialByte: byte
+      CompactionByte: byte }
+
+/// Soil settling: a budgeted cellular pass over dirty tiles in index order
+/// (deterministic). Two regimes per neighbor pair:
+///  - loose material (low compaction) flows toward its angle of repose;
+///  - bank material holds until the face exceeds the cohesive critical
+///    height h_crit ≈ 4c/γ, then fails as a wedge → clumps (the trench-wall
+///    collapse). Cohesionless bank (sand, gravel) just relaxes by repose.
 [<RequireQualifiedAccess>]
 module Settle =
 
@@ -14,15 +26,34 @@ module Settle =
     [<Literal>]
     let TileBudget = 16
 
-    /// Compaction at/above this holds its slope regardless of repose (it is
-    /// "bank enough"); below it, the CA may move it.
+    /// Compaction at/above this is "bank": rules by cohesion, not repose.
     [<Literal>]
     let LooseThreshold = 128uy
 
-    let private relaxPair (state: SoilState) (xa: int) (za: int) (xb: int) (zb: int) =
+    /// Cells' worth of occupancy shed per wedge failure event.
+    [<Literal>]
+    let WedgeUnits = 510
+
+    /// h_crit ≈ 4c/γ (c in kPa → Pa; γ = ρg).
+    let criticalHeight (props: SoilProperties) =
+        if props.Cohesion <= 0.01f<kPa> then
+            0.0f
+        else
+            4.0f * float32 props.Cohesion * 1000.0f
+            / (float32 props.BankDensity * 9.81f)
+
+    let private relaxPair
+        (state: SoilState)
+        (failures: ResizeArray<WallFailure>)
+        (xa: int)
+        (za: int)
+        (xb: int)
+        (zb: int)
+        =
         let config = state.Config
         let ha = state.Heights.[state.ColumnIndex(xa, za)]
         let hb = state.Heights.[state.ColumnIndex(xb, zb)]
+
         let struct (hiX, hiZ, loX, loZ, diff) =
             if ha >= hb then
                 struct (xa, za, xb, zb, ha - hb)
@@ -30,7 +61,7 @@ module Settle =
                 struct (xb, zb, xa, za, hb - ha)
 
         if diff > config.CellSize * 0.5f then
-            // Peek the high column's top material to get its repose slope.
+            // Peek the high column's top cell.
             let mutable y = config.CellsY - 1
 
             while y >= 0 && state.Occupancy.[state.Index(hiX, y, hiZ)] = 0uy do
@@ -38,39 +69,53 @@ module Settle =
 
             if y >= 0 then
                 let index = state.Index(hiX, y, hiZ)
+                let matByte = state.Material.[index]
+                let compByte = state.Compaction.[index]
+                let props = Tuning.soil (Volume.materialOfByte matByte)
 
-                if state.Compaction.[index] < LooseThreshold then
-                    let props = Tuning.soil (Volume.materialOfByte state.Material.[index])
+                if compByte < LooseThreshold then
+                    // Loose: angle-of-repose flow toward the low column.
                     let critical = MathF.Tan props.FrictionAngle * config.CellSize
 
                     if diff > critical then
-                        // Move half the excess, capped at the top cell.
-                        let excessUnits =
-                            int ((diff - critical) / config.CellSize * 255.0f / 2.0f)
+                        let excessUnits = int ((diff - critical) / config.CellSize * 255.0f / 2.0f)
 
                         if excessUnits > 0 then
-                            let struct (units, matByte, compByte) =
+                            let struct (units, takenMat, takenComp) =
                                 Volume.takeTop state hiX hiZ excessUnits
 
                             if units > 0 then
-                                Volume.putUnits state loX loZ units matByte compByte
+                                Volume.putUnits state loX loZ units takenMat takenComp
                                 state.MarkDirty(hiX, hiZ)
-                                true
-                            else
-                                false
-                        else
-                            false
-                    else
-                        false
-                else
-                    false
-            else
-                false
-        else
-            false
+                elif diff > criticalHeight props + config.CellSize then
+                    // Bank: the face is over-steep beyond what cohesion can
+                    // hold. Cohesionless bank just flows; cohesive bank
+                    // fails as a whole wedge → clumps (recorded, spawned by
+                    // World).
+                    if criticalHeight props <= 0.0f then
+                        let struct (units, takenMat, takenComp) =
+                            Volume.takeTop state hiX hiZ (WedgeUnits / 2)
 
-    /// One budgeted settling pass. Returns the number of tiles processed.
-    let tick (state: SoilState) =
+                        if units > 0 then
+                            Volume.putUnits state loX loZ units takenMat takenComp
+                            state.MarkDirty(hiX, hiZ)
+                    else
+                        let struct (units, takenMat, takenComp) =
+                            Volume.takeTop state hiX hiZ WedgeUnits
+
+                        if units > 0 then
+                            failures.Add
+                                { X = hiX
+                                  Z = hiZ
+                                  Units = units
+                                  MaterialByte = takenMat
+                                  CompactionByte = takenComp }
+
+                            state.MarkDirty(hiX, hiZ)
+                            state.MarkDirty(loX, loZ)
+
+    /// One budgeted settling pass; wall failures land in `failures`.
+    let tick (state: SoilState) (failures: ResizeArray<WallFailure>) =
         let config = state.Config
         let mutable processed = 0
         let mutable tile = 0
@@ -92,10 +137,10 @@ module Settle =
                 for z in z0 .. z1 - 1 do
                     for x in x0 .. x1 - 1 do
                         if x + 1 < config.CellsX then
-                            relaxPair state x z (x + 1) z |> ignore
+                            relaxPair state failures x z (x + 1) z
 
                         if z + 1 < config.CellsZ then
-                            relaxPair state x z x (z + 1) |> ignore
+                            relaxPair state failures x z x (z + 1)
 
             tile <- tile + 1
 

@@ -22,6 +22,7 @@
     <Compile Include="SoilDeterminismTests.fs" />
     <Compile Include="MachineTests.fs" />
     <Compile Include="DigTests.fs" />
+    <Compile Include="LivingGroundTests.fs" />
     <Compile Include="AllocationTests.fs" />
   </ItemGroup>
 </Project>

@@ -126,6 +126,18 @@ module Bepu =
 
         simulation.Bodies.Add(&desc)
 
+    let addKinematicSphere (simulation: Simulation) (position: Vector3) (radius: float32) =
+        let shape = Sphere(radius)
+
+        let desc =
+            BodyDescription.CreateKinematic(
+                RigidPose(position),
+                CollidableDescription(simulation.Shapes.Add(&shape)),
+                BodyActivityDescription(0.01f)
+            )
+
+        simulation.Bodies.Add(&desc)
+
     let addKinematicBox (simulation: Simulation) (position: Vector3) (size: Vector3) =
         let shape = Box(size.X, size.Y, size.Z)
 

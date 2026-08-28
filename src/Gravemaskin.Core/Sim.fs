@@ -31,6 +31,13 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
     let mutable machine: Machine option = None
     // Low-passed FEE resistance (force never pops across cell boundaries).
     let mutable feeForce = Vector3.Zero
+    // Wall-failure scratch (allocation-free after warmup).
+    let wallFailures = ResizeArray<WallFailure>(16)
+    // Buried rocks: kinematic while buried, dynamic once exposed.
+    let rockHandles = ResizeArray<BepuPhysics.BodyHandle>(64)
+    let rockRadii = ResizeArray<float32>(64)
+    let rockExposed = ResizeArray<bool>(64)
+    let mutable rockStruckCooldown = 0
 
     let surfaceHeight (x: float32) (z: float32) =
         match soilState with
@@ -218,6 +225,115 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
             m.RefreshLoadInertia()
         | _ -> ()
 
+    /// Track passes squeeze loose soil toward bank density: same mass,
+    /// less volume — ruts emerge from real deformation, no decals.
+    member private _.CompactionTick(state: SoilState) =
+        match machine with
+        | Some m ->
+            for side in 0..1 do
+                if System.MathF.Abs(m.TrackAxis side) > 0.15f then
+                    let point = m.TrackContactPoint side
+                    let config = state.Config
+                    let x = int (point.X / config.CellSize) |> max 0 |> min (config.CellsX - 1)
+                    let z = int (point.Z / config.CellSize) |> max 0 |> min (config.CellsZ - 1)
+                    // Only compact ground the track actually presses on.
+                    if point.Y - state.Heights.[state.ColumnIndex(x, z)] < 0.35f then
+                        let mutable y = config.CellsY - 1
+
+                        while y >= 0 && state.Occupancy.[state.Index(x, y, z)] = 0uy do
+                            y <- y - 1
+
+                        if y >= 0 then
+                            let index = state.Index(x, y, z)
+                            let compOld = state.Compaction.[index]
+
+                            if compOld < 255uy then
+                                let matByte = state.Material.[index]
+                                let occ = int state.Occupancy.[index]
+                                let compNew = byte (min 255 (int compOld + 3))
+                                let mpuOld = Volume.massPerOccUnit config matByte compOld
+                                let mpuNew = Volume.massPerOccUnit config matByte compNew
+                                let massOld = float occ * mpuOld
+                                let occNew = int (massOld / mpuNew)
+                                state.Compaction.[index] <- compNew
+                                state.Occupancy.[index] <- byte (min 255 occNew)
+                                // Quantization residual stays ledgered.
+                                state.Unbanked.[int matByte] <-
+                                    state.Unbanked.[int matByte]
+                                    + (massOld - float (min 255 occNew) * mpuNew)
+
+                                Volume.refreshColumnHeight state x z
+                                state.MarkDirty(x, z)
+        | None -> ()
+
+    /// Seed buried rocks: kinematic (soil "holds" them) until exposed.
+    member _.SeedRocks(count: int) =
+        match soilState with
+        | Some state ->
+            let config = state.Config
+
+            for _ in 1..count do
+                let x = 4.0f + Rng.nextFloat32 &rng * (float32 config.CellsX * config.CellSize - 8.0f)
+                let z = 4.0f + Rng.nextFloat32 &rng * (float32 config.CellsZ * config.CellSize - 8.0f)
+                let radius = 0.2f + Rng.nextFloat32 &rng * 0.18f
+                let surface = Soil.surfaceHeight state x z
+                let y = surface - radius - 0.15f - Rng.nextFloat32 &rng * 0.6f
+
+                if y > radius then
+                    let handle =
+                        Bepu.addKinematicSphere physics.Simulation (Vector3(x, y, z)) radius
+
+                    rockHandles.Add handle
+                    rockRadii.Add radius
+                    rockExposed.Add false
+        | None -> ()
+
+    member _.Rocks = rockHandles
+
+    /// Expose rocks the digging uncovers (kinematic → dynamic) and raise
+    /// RockStruck when the cutting edge slams one.
+    member private _.RockTick(state: SoilState) =
+        rockStruckCooldown <- max 0 (rockStruckCooldown - 1)
+
+        // Exposure is amortized: a few rocks per tick, round-robin by tick.
+        for i in 0 .. rockHandles.Count - 1 do
+            if not rockExposed.[i] && (int (tick % 16L) = i % 16) then
+                let bodyRef = physics.Simulation.Bodies.[rockHandles.[i]]
+                let position = bodyRef.Pose.Position
+                let surface = Soil.surfaceHeight state position.X position.Z
+
+                // Convert only once the rock's center clears the remaining
+                // floor: a dynamic body released below the one-sided surface
+                // mesh falls out of the world.
+                if surface < position.Y - rockRadii.[i] * 0.25f then
+                    rockExposed.[i] <- true
+                    let shape = BepuPhysics.Collidables.Sphere(rockRadii.[i])
+                    let volume = 4.0f / 3.0f * System.MathF.PI * rockRadii.[i] ** 3.0f
+                    let mutable inertia = shape.ComputeInertia(volume * 2600.0f)
+                    // Kinematic→dynamic MUST go through SetLocalInertia: a
+                    // direct LocalInertia write corrupts solver batches
+                    // (AccessViolation in ScatterInertia, found the hard way).
+                    physics.Simulation.Bodies.SetLocalInertia(rockHandles.[i], &inertia)
+                    let mutable exposedRef = physics.Simulation.Bodies.[rockHandles.[i]]
+                    exposedRef.Awake <- true
+
+        match machine with
+        | Some m when rockStruckCooldown = 0 ->
+            let edge = m.BucketTipPosition
+            let speed = m.CuttingEdgeVelocity.Length()
+
+            if speed > 0.4f then
+                for i in 0 .. rockHandles.Count - 1 do
+                    let position = physics.Simulation.Bodies.[rockHandles.[i]].Pose.Position
+
+                    if
+                        rockStruckCooldown = 0
+                        && Vector3.DistanceSquared(position, edge) < (rockRadii.[i] + 0.2f) ** 2.0f
+                    then
+                        events.Add RockStruck
+                        rockStruckCooldown <- 30
+        | _ -> ()
+
     member this.Step(input: InputFrame) : RenderState =
         events.Clear()
 
@@ -238,7 +354,28 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
         match soilState with
         | Some state ->
             clumps.SettlePass(physics.Simulation, state)
-            Soil.settleTick state
+            Soil.settleTick state wallFailures
+
+            // Cohesive wedge failures tumble off the face as clumps.
+            for failure in wallFailures do
+                events.Add WallCollapsed
+
+                let mass =
+                    float failure.Units
+                    * Volume.massPerOccUnit state.Config failure.MaterialByte failure.CompactionByte
+
+                let position =
+                    Vector3(
+                        (float32 failure.X + 0.5f) * state.Config.CellSize,
+                        state.Heights.[state.ColumnIndex(failure.X, failure.Z)] + 0.35f,
+                        (float32 failure.Z + 0.5f) * state.Config.CellSize
+                    )
+
+                this.SpawnClump(position, Vector3.Zero, mass, Volume.materialOfByte failure.MaterialByte)
+
+            wallFailures.Clear()
+            this.CompactionTick state
+            this.RockTick state
             physics.SwapDirtyTiles(state, World.MeshSwapBudget) |> ignore
         | None -> ()
 
@@ -275,6 +412,13 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
         match machine with
         | Some m -> m.FillSnapshot snapshot
         | None -> snapshot.MachinePartCount <- 0
+
+        let rockCount = min rockHandles.Count snapshot.RockPositions.Length
+        snapshot.RockCount <- rockCount
+
+        for i in 0 .. rockCount - 1 do
+            snapshot.RockPositions.[i] <- physics.Simulation.Bodies.[rockHandles.[i]].Pose.Position
+            snapshot.RockRadii.[i] <- rockRadii.[i]
 
     interface System.IDisposable with
         member _.Dispose() = (physics :> System.IDisposable).Dispose()
