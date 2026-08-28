@@ -83,6 +83,33 @@ let main args =
     let screenshotPath = argValue "--screenshot"
     let mutable settings = Settings.load ()
 
+    // Input recording/replay: the deterministic sim makes a stream of
+    // InputFrames a perfect reproduction of a session.
+    let recordWriter =
+        argValue "--record"
+        |> Option.map (fun path -> new IO.BinaryWriter(IO.File.Create path))
+
+    let replayFrames =
+        argValue "--replay"
+        |> Option.map (fun path ->
+            use reader = new IO.BinaryReader(IO.File.OpenRead path)
+            let frames = ResizeArray<InputFrame>()
+
+            while reader.BaseStream.Position < reader.BaseStream.Length do
+                frames.Add
+                    { Sequence = reader.ReadInt64()
+                      Swing = reader.ReadSingle()
+                      Boom = reader.ReadSingle()
+                      Stick = reader.ReadSingle()
+                      Bucket = reader.ReadSingle()
+                      LeftTrack = reader.ReadSingle()
+                      RightTrack = reader.ReadSingle()
+                      Buttons = enum (reader.ReadInt32()) }
+
+            frames)
+
+    let mutable replayIndex = 0
+
     let mutable options = WindowOptions.Default
     options.Title <- "GRAVEMASKIN"
     options.Size <- Vector2D<int>(settings.WindowWidth, settings.WindowHeight)
@@ -357,7 +384,26 @@ let main args =
 
             inputSequence <- inputSequence + 1L
 
-            world.Step { machineInput with Sequence = inputSequence } |> ignore
+            let frame =
+                match replayFrames with
+                | Some frames when replayIndex < frames.Count ->
+                    replayIndex <- replayIndex + 1
+                    frames.[replayIndex - 1]
+                | _ -> { machineInput with Sequence = inputSequence }
+
+            match recordWriter with
+            | Some writer ->
+                writer.Write frame.Sequence
+                writer.Write frame.Swing
+                writer.Write frame.Boom
+                writer.Write frame.Stick
+                writer.Write frame.Bucket
+                writer.Write frame.LeftTrack
+                writer.Write frame.RightTrack
+                writer.Write(int frame.Buttons)
+            | None -> ()
+
+            world.Step frame |> ignore
 
             match audio with
             | Some system -> system.Update(world.Machine, world.Events, float32 fixedStep)
@@ -471,6 +517,8 @@ let main args =
 
         match maxFrames with
         | Some limit when frameCount >= int64 limit ->
+            recordWriter |> Option.iter (fun writer -> writer.Dispose())
+
             match screenshotPath with
             | Some path ->
                 screenshot gl size.X size.Y path
