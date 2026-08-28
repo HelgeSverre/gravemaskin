@@ -116,6 +116,31 @@ module Domain =
           Circuit: int
           QMax: float32 }
 
+    /// Everything that defines a machine: physics geometry, masses, joints,
+    /// drives. Machines are data — the rig code is generic.
+    type MachineRig =
+        { Spec: MachineSpec
+          BoomJoint: CylinderJoint
+          StickJoint: CylinderJoint
+          BucketJoint: CylinderJoint
+          SwingTorque: float32
+          SwingMaxVel: float32
+          SwingQMax: float32
+          TrackMaxForce: float32
+          TrackMaxSpeed: float32
+          TrackQMax: float32
+          TrackGain: float32
+          /// Component masses (kg): chassis, house, boom, stick, bucket.
+          Masses: float32 * float32 * float32 * float32 * float32
+          /// Overall scale relative to the U17 assembly layout (part sizes
+          /// and pivot offsets multiply by this).
+          Scale: float32
+          BucketTipRadius: float32
+          BucketCapacityKg: float
+          /// Angle past which the payload pours out.
+          DumpAngle: float32
+          DumpRatePerTick: float }
+
     /// POD snapshot handed to the shell each tick; the render thread
     /// interpolates between two of these (never between mutable worlds).
     [<Struct>]
@@ -138,6 +163,7 @@ type RenderSnapshot(capacity: int) =
     member val MachinePartCount = 0 with get, set
     member val MachinePositions = Array.zeroCreate<Vector3> 8
     member val MachineOrientations = Array.zeroCreate<Quaternion> 8
+    member val MachineScale = 1.0f with get, set
     member val RockCount = 0 with get, set
     member val RockPositions = Array.zeroCreate<Vector3> 64
     member val RockRadii = Array.zeroCreate<float32> 64

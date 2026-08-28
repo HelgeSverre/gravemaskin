@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish and tar
+        run: |
+          set -euo pipefail
+          dotnet publish src/Gravemaskin/Gravemaskin.fsproj \
+            --configuration Release --runtime linux-x64 --self-contained \
+            --output publish/linux-x64
+          tar -czf gravemaskin-linux-x64.tar.gz -C publish/linux-x64 .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: gravemaskin-linux-x64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish and zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish src/Gravemaskin/Gravemaskin.fsproj \
+            --configuration Release --runtime win-x64 --self-contained \
+            --output publish/win-x64
+          7z a -bso0 gravemaskin-win-x64.zip ./publish/win-x64/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: gravemaskin-win-x64.zip
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish both arches and build universal .app + .pkg
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"; [[ "$VERSION" == "$GITHUB_REF_NAME" ]] && VERSION="0.0.0"
+          for rid in osx-x64 osx-arm64; do
+            dotnet publish src/Gravemaskin/Gravemaskin.fsproj \
+              --configuration Release --runtime "$rid" --self-contained \
+              --output "publish/$rid"
+            tar -czf "gravemaskin-$rid.tar.gz" -C "publish/$rid" .
+          done
+
+          app="Gravemaskin.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > "$app/Contents/Info.plist"
+          install -m 755 packaging/launcher.sh "$app/Contents/MacOS/Gravemaskin"
+          cp -R publish/osx-x64 "$app/Contents/MacOS/x64"
+          cp -R publish/osx-arm64 "$app/Contents/MacOS/arm64"
+          # Ad-hoc signature: not notarized, but keeps arm64 macOS from
+          # refusing to exec entirely (unsigned arm64 binaries won't run).
+          codesign --force --deep -s - "$app"
+
+          pkgbuild --component "$app" --install-location /Applications \
+            --identifier com.helgesverre.gravemaskin --version "$VERSION" \
+            gravemaskin-macos-universal.pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            gravemaskin-macos-universal.pkg
+            gravemaskin-osx-x64.tar.gz
+            gravemaskin-osx-arm64.tar.gz
+
+  release:
+    needs: [linux, windows, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: gravemaskin-*

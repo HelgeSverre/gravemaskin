@@ -83,3 +83,28 @@ check: lint build test smoke
 [group('test')]
 perf: _sdk
     {{ dotnet }} test {{ tests }} -c Release --nologo --filter "FullyQualifiedName~budget"
+
+# Build+install .app (macOS, dev, current arch only).
+[group('build')]
+[macos]
+install: _sdk
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rid=$([ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ] && echo osx-arm64 || echo osx-x64)
+    out="$PWD/.build/install"
+    rm -rf "$out"
+    PATH="$PWD/.dotnet:$PATH" dotnet publish {{ client }} -c Release -r "$rid" --self-contained -o "$out"
+    app="/Applications/Gravemaskin.app"
+    rm -rf "$app"
+    mkdir -p "$app/Contents/MacOS"
+    sed "s/@VERSION@/0.0.0-dev/g" packaging/Info.plist > "$app/Contents/Info.plist"
+    cp -R "$out/." "$app/Contents/MacOS/"
+    codesign --force --deep -s - "$app"
+    echo "Installed $app ($rid)"
+
+# Remove installed .app.
+[group('build')]
+[macos]
+uninstall:
+    rm -rf /Applications/Gravemaskin.app
+    @echo "Removed /Applications/Gravemaskin.app"

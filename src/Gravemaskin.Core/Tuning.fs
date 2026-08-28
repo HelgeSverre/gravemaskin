@@ -145,6 +145,81 @@ module Tuning =
     /// max reach used in stall tests.
     let u17BucketTipRadius = 0.7f
 
+    /// Complete machine rigs. The U17 is the assembly-layout reference
+    /// (Scale 1); the Cat 320 is ~2.4× the linear size with its own spec-
+    /// sheet joints (two 120 mm boom cylinders folded into one equivalent
+    /// bore; 35 MPa relief).
+    let u17Rig =
+        { Spec = u17
+          BoomJoint = u17BoomJoint
+          StickJoint = u17StickJoint
+          BucketJoint = u17BucketJoint
+          SwingTorque = u17SwingTorque
+          SwingMaxVel = u17SwingMaxVel
+          SwingQMax = u17SwingQMax
+          TrackMaxForce = u17TrackMaxForce
+          TrackMaxSpeed = u17TrackMaxSpeed
+          TrackQMax = u17TrackQMax
+          TrackGain = u17TrackGain
+          Masses = 860.0f, 550.0f, 180.0f, 90.0f, 50.0f
+          Scale = 1.0f
+          BucketTipRadius = 0.7f
+          BucketCapacityKg = 70.0
+          DumpAngle = -0.35f
+          DumpRatePerTick = 4.0 }
+
+    let cat320Rig =
+        { Spec = cat320
+          BoomJoint =
+            { Ra = 0.9f
+              Rb = 2.3f
+              AngleOffset = 1.4f
+              Bore = 0.170f // two 120 mm cylinders, equivalent single bore
+              Rod = 0.085f
+              ExtendPositive = true
+              MinAngle = -0.5f
+              MaxAngle = 1.15f
+              Circuit = 0
+              QMax = 214.0f }
+          StickJoint =
+            { Ra = 1.9f
+              Rb = 0.72f
+              AngleOffset = 2.6f
+              Bore = 0.140f
+              Rod = 0.075f
+              ExtendPositive = false
+              MinAngle = -2.3f
+              MaxAngle = 0.25f
+              Circuit = 0
+              QMax = 214.0f }
+          BucketJoint =
+            { Ra = 0.95f
+              Rb = 0.58f
+              AngleOffset = 2.0f
+              Bore = 0.120f
+              Rod = 0.060f
+              ExtendPositive = false
+              MinAngle = -2.4f
+              MaxAngle = 0.35f
+              Circuit = 0
+              QMax = 160.0f }
+          SwingTorque = 82000.0f
+          SwingMaxVel = 1.18f // 11.25 rpm
+          SwingQMax = 120.0f
+          TrackMaxForce = 100000.0f // drawbar 205 kN across both tracks-ish
+          TrackMaxSpeed = 1.53f // 5.5 km/h
+          TrackQMax = 100.0f
+          TrackGain = 250000.0f
+          Masses = 9770.0f, 7980.0f, 1900.0f, 1110.0f, 940.0f
+          Scale = 2.4f
+          BucketTipRadius = 1.5f
+          BucketCapacityKg = 1600.0
+          DumpAngle = -0.35f
+          DumpRatePerTick = 60.0 }
+
+    let rigByName (name: string) =
+        if name.Contains "320" then cat320Rig else u17Rig
+
     /// FEE calibration knobs (see Excavator/Fee.fs — folded N-factors).
     /// Expect hand-tuning; that is their job.
     let FeeGammaFactor = 6.0f

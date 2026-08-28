@@ -281,6 +281,40 @@ module Volume =
         refreshColumnHeight state x z
         state.MarkDirty(x, z)
 
+    /// Noise-seeded terrain: rolling height, clay under topsoil, dry-sand
+    /// patches. Initializes heights + ledger.
+    let fillTerrain (state: SoilState) (seed: int) (baseHeight: float32) (relief: float32) =
+        let config = state.Config
+
+        for z in 0 .. config.CellsZ - 1 do
+            for x in 0 .. config.CellsX - 1 do
+                let point =
+                    System.Numerics.Vector2(float32 x * 0.045f, float32 z * 0.045f)
+
+                let height =
+                    baseHeight + (Noise.fbm2 seed 4 point - 0.5f) * 2.0f * relief
+
+                let sandiness = Noise.fbm2 (seed + 7919) 3 (point * 0.6f)
+                let fullCells = max 1 (int (height / config.CellSize))
+
+                for y in 0 .. min (fullCells - 1) (config.CellsY - 1) do
+                    let index = state.Index(x, y, z)
+                    let depthFromTop = float32 (fullCells - 1 - y) * config.CellSize
+
+                    let mat =
+                        if depthFromTop > 0.6f then Clay
+                        elif sandiness > 0.62f then DrySand
+                        else Topsoil
+
+                    state.Occupancy.[index] <- 255uy
+                    state.Material.[index] <- byteOfMaterial mat
+                    state.Compaction.[index] <- 255uy
+
+                refreshColumnHeight state x z
+
+        let masses = scanMassByMaterial state
+        Array.blit masses 0 state.Ledger 0 5
+
     /// Fill the volume as flat bank-density terrain of one material up to
     /// `groundHeight` meters, and initialize heights + ledger.
     let fillFlat (state: SoilState) (mat: SoilMaterial) (groundHeight: float32) =

@@ -14,6 +14,11 @@ module Soil =
         Volume.fillFlat state mat groundHeight
         state
 
+    let createTerrain (config: SoilConfig) (seed: int) (baseHeight: float32) (relief: float32) =
+        let state = SoilState(config)
+        Volume.fillTerrain state seed baseHeight relief
+        state
+
     let surfaceHeight (state: SoilState) (x: float32) (z: float32) =
         let config = state.Config
         let cx = int (x / config.CellSize) |> max 0 |> min (config.CellsX - 1)

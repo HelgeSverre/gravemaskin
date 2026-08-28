@@ -5,7 +5,12 @@ open System.Numerics
 /// The mutable world (bloom precedent). The house invariant is headless
 /// determinism behind Step(InputFrame), not immutability: BEPU is pool-based
 /// and soil is flat arrays.
-type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * float32) option) =
+type SoilSetup =
+    | FlatSoil of SoilConfig * SoilMaterial * float32
+    | TerrainSoil of SoilConfig * int * float32 * float32
+    | PrebuiltSoil of SoilState
+
+type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
     let physics = new Physics(threadCount)
     let mutable rng = Rng.create seed
     let mutable tick = 0L
@@ -17,9 +22,10 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
 
     let soilState =
         match soil with
-        | Some(config, mat, groundHeight) ->
-            let state = Soil.create config mat groundHeight
-            Some state
+        | Some(FlatSoil(config, mat, groundHeight)) -> Some(Soil.create config mat groundHeight)
+        | Some(TerrainSoil(config, terrainSeed, baseHeight, relief)) ->
+            Some(Soil.createTerrain config terrainSeed baseHeight relief)
+        | Some(PrebuiltSoil state) -> Some state
         | None ->
             // No soil volume: a plain rigid slab so physics tests have ground.
             Bepu.addStaticBox physics.Simulation (Vector3(0.0f, -0.5f, 0.0f)) (Vector3(200.0f, 1.0f, 200.0f))
@@ -71,7 +77,13 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
     /// `position` (XZ).
     member _.SpawnMachine(position: Vector3) =
         let ground = surfaceHeight position.X position.Z
-        let spawned = Machine(physics, Tuning.u17, Vector3(position.X, ground + 0.01f, position.Z))
+        let spawned = Machine(physics, Tuning.u17Rig, Vector3(position.X, ground + 0.01f, position.Z))
+        machine <- Some spawned
+        spawned
+
+    member _.SpawnMachineRig(rig: MachineRig, position: Vector3) =
+        let ground = surfaceHeight position.X position.Z
+        let spawned = Machine(physics, rig, Vector3(position.X, ground + 0.01f, position.Z))
         machine <- Some spawned
         spawned
 
@@ -334,6 +346,92 @@ type World(seed: uint64, threadCount: int, soil: (SoilConfig * SoilMaterial * fl
                         rockStruckCooldown <- 30
         | _ -> ()
 
+    /// Restore one rock from a save.
+    member _.AddRock(position: Vector3, radius: float32, exposed: bool) =
+        let handle = Bepu.addKinematicSphere physics.Simulation position radius
+        rockHandles.Add handle
+        rockRadii.Add radius
+        rockExposed.Add exposed
+
+        if exposed then
+            let shape = BepuPhysics.Collidables.Sphere(radius)
+            let volume = 4.0f / 3.0f * System.MathF.PI * radius ** 3.0f
+            let mutable inertia = shape.ComputeInertia(volume * 2600.0f)
+            physics.Simulation.Bodies.SetLocalInertia(handle, &inertia)
+
+    /// Save policy (SPEC amendment): force-settle first — all airborne
+    /// clumps and the bucket payload bank into the volume, so the ledger
+    /// round-trips exactly and nothing in flight is lost.
+    member this.Save(path: string) =
+        match soilState with
+        | None -> ()
+        | Some state ->
+            // Bank every live clump where it is.
+            while clumps.Count > 0 do
+                let position = physics.Simulation.Bodies.[clumps.Handles.[0]].Pose.Position
+                Soil.deposit state position clumps.Masses.[0] (Volume.materialOfByte clumps.Materials.[0])
+                clumps.RemoveAt(physics.Simulation, 0)
+
+            // Fold the payload out onto the ground under the bucket.
+            match machine with
+            | Some m ->
+                for i in 0..4 do
+                    if m.BucketLoad.[i] > 0.0 then
+                        Soil.deposit state m.BucketTipPosition m.BucketLoad.[i] (Volume.materialOfByte (byte i))
+                        m.BucketLoad.[i] <- 0.0
+            | None -> ()
+
+            use stream = System.IO.File.Create path
+            use writer = new System.IO.BinaryWriter(stream)
+            writer.Write "GRAV1"
+            writer.Write state.Config.CellSize
+            writer.Write state.Config.CellsX
+            writer.Write state.Config.CellsY
+            writer.Write state.Config.CellsZ
+
+            let writeCompressed (data: byte[]) =
+                use buffer = new System.IO.MemoryStream()
+
+                do
+                    use deflate =
+                        new System.IO.Compression.DeflateStream(
+                            buffer,
+                            System.IO.Compression.CompressionLevel.Fastest,
+                            true
+                        )
+
+                    deflate.Write(data, 0, data.Length)
+
+                writer.Write(int buffer.Length)
+                writer.Write(buffer.ToArray())
+
+            writeCompressed state.Occupancy
+            writeCompressed state.Material
+            writeCompressed state.Compaction
+
+            for i in 0..4 do
+                writer.Write state.Ledger.[i]
+                writer.Write state.Unbanked.[i]
+
+            match machine with
+            | Some m ->
+                writer.Write true
+                writer.Write m.Rig.Spec.Name
+                let position = physics.Simulation.Bodies.[m.Chassis].Pose.Position
+                writer.Write position.X
+                writer.Write position.Z
+            | None -> writer.Write false
+
+            writer.Write rockHandles.Count
+
+            for i in 0 .. rockHandles.Count - 1 do
+                let position = physics.Simulation.Bodies.[rockHandles.[i]].Pose.Position
+                writer.Write position.X
+                writer.Write position.Y
+                writer.Write position.Z
+                writer.Write rockRadii.[i]
+                writer.Write rockExposed.[i]
+
     member this.Step(input: InputFrame) : RenderState =
         events.Clear()
 
@@ -440,4 +538,73 @@ module Sim =
           CellsZ = 128 }
 
     let createSoilWorld seed mat groundHeight =
-        new World(seed, defaultThreadCount, Some(defaultSoilConfig, mat, groundHeight))
+        new World(seed, defaultThreadCount, Some(FlatSoil(defaultSoilConfig, mat, groundHeight)))
+
+    /// The sandbox: 32×32 m rolling terrain with strata and sand patches.
+    let createTerrainWorld seed =
+        new World(seed, defaultThreadCount, Some(TerrainSoil(defaultSoilConfig, int seed, 2.2f, 0.8f)))
+
+    /// Load a save written by World.Save. The arm respawns in its parked
+    /// pose (poses of five constrained bodies aren't worth serializing);
+    /// terrain, ledger, machine placement, and rocks round-trip exactly.
+    let loadWorld (seed: uint64) (path: string) =
+        use stream = System.IO.File.OpenRead path
+        use reader = new System.IO.BinaryReader(stream)
+
+        if reader.ReadString() <> "GRAV1" then
+            failwith "not a Gravemaskin save"
+
+        let config =
+            { CellSize = reader.ReadSingle()
+              CellsX = reader.ReadInt32()
+              CellsY = reader.ReadInt32()
+              CellsZ = reader.ReadInt32() }
+
+        let state = SoilState(config)
+
+        let readCompressed (target: byte[]) =
+            let length = reader.ReadInt32()
+            let compressed = reader.ReadBytes length
+            use buffer = new System.IO.MemoryStream(compressed)
+
+            use deflate =
+                new System.IO.Compression.DeflateStream(buffer, System.IO.Compression.CompressionMode.Decompress)
+
+            let mutable offset = 0
+            let mutable read = 1
+
+            while read > 0 && offset < target.Length do
+                read <- deflate.Read(target, offset, target.Length - offset)
+                offset <- offset + read
+
+        readCompressed state.Occupancy
+        readCompressed state.Material
+        readCompressed state.Compaction
+
+        for i in 0..4 do
+            state.Ledger.[i] <- reader.ReadDouble()
+            state.Unbanked.[i] <- reader.ReadDouble()
+
+        for z in 0 .. config.CellsZ - 1 do
+            for x in 0 .. config.CellsX - 1 do
+                Volume.refreshColumnHeight state x z
+
+        let world = new World(seed, defaultThreadCount, Some(PrebuiltSoil state))
+
+        if reader.ReadBoolean() then
+            let name = reader.ReadString()
+            let x = reader.ReadSingle()
+            let z = reader.ReadSingle()
+            world.SpawnMachineRig(Tuning.rigByName name, System.Numerics.Vector3(x, 0.0f, z)) |> ignore
+
+        let rockCount = reader.ReadInt32()
+
+        for _ in 1..rockCount do
+            let x = reader.ReadSingle()
+            let y = reader.ReadSingle()
+            let z = reader.ReadSingle()
+            let radius = reader.ReadSingle()
+            let exposed = reader.ReadBoolean()
+            world.AddRock(System.Numerics.Vector3(x, y, z), radius, exposed)
+
+        world

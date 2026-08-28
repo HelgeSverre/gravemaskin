@@ -308,6 +308,8 @@ type Renderer(gl: GL, state: SoilState) =
 
             for (part, offset, size, color) in machineBoxes do
                 if part < current.MachinePartCount then
+                    let offset = offset * current.MachineScale
+                    let size = size * current.MachineScale
                     let hasPrevious = part < previous.MachinePartCount
 
                     let position =

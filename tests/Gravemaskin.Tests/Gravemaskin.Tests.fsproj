@@ -23,6 +23,7 @@
     <Compile Include="MachineTests.fs" />
     <Compile Include="DigTests.fs" />
     <Compile Include="LivingGroundTests.fs" />
+    <Compile Include="ShipTests.fs" />
     <Compile Include="AllocationTests.fs" />
   </ItemGroup>
 </Project>

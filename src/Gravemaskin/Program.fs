@@ -101,6 +101,21 @@ let main args =
     let mutable world = Unchecked.defaultof<World>
     let mutable state = Unchecked.defaultof<SoilState>
     let mutable patternToggleLatch = false
+    let mutable saveLatch = false
+    let mutable loadLatch = false
+
+    let savePath () =
+        let home =
+            Environment.GetEnvironmentVariable "GRAVEMASKIN_HOME"
+            |> Option.ofObj
+            |> Option.defaultWith (fun () ->
+                IO.Path.Combine(
+                    Environment.GetFolderPath Environment.SpecialFolder.ApplicationData,
+                    "Gravemaskin"
+                ))
+
+        IO.Directory.CreateDirectory home |> ignore
+        IO.Path.Combine(home, "sandbox.grav")
 
     // Fixed-step accumulator (house loop) + snapshot double buffer.
     let mutable accumulator = 0.0
@@ -135,9 +150,15 @@ let main args =
         gl <- GL.GetApi window
         input <- window.CreateInput()
 
-        world <- Sim.createSoilWorld 0xD16D16UL Topsoil 2.0f
+        world <- Sim.createTerrainWorld 0xD16D16UL
         state <- world.SoilState.Value
-        world.SpawnMachine(Vector3(16.0f, 0.0f, 16.0f)) |> ignore
+
+        let rig =
+            argValue "--machine"
+            |> Option.map Tuning.rigByName
+            |> Option.defaultValue Tuning.u17Rig
+
+        world.SpawnMachineRig(rig, Vector3(16.0f, 0.0f, 16.0f)) |> ignore
         world.SeedRocks 24
         renderer <- Renderer(gl, state)
         hud <- Hud(gl)
@@ -229,6 +250,28 @@ let main args =
         let axis negative positive =
             (if keyboard.IsKeyPressed positive then 1.0f else 0.0f)
             - (if keyboard.IsKeyPressed negative then 1.0f else 0.0f)
+
+        // F5 save / F9 load (edge-latched). Loading swaps the whole world;
+        // the renderer is rebuilt against the new soil state.
+        let f5 = keyboard.IsKeyPressed Key.F5
+
+        if f5 && not saveLatch then
+            world.Save(savePath ())
+
+        saveLatch <- f5
+        let f9 = keyboard.IsKeyPressed Key.F9
+
+        if f9 && not loadLatch && IO.File.Exists(savePath ()) then
+            (world :> IDisposable).Dispose()
+            world <- Sim.loadWorld 0xD16D16UL (savePath ())
+            state <- world.SoilState.Value
+            // ponytail: the old renderer's GL objects leak on load — a few
+            // hundred KB per load, cleanup when it ever matters.
+            renderer <- Renderer(gl, state)
+            world.SnapshotInto previous
+            world.SnapshotInto current
+
+        loadLatch <- f9
 
         // P toggles ISO/SAE (edge-latched, persisted).
         let pKey = keyboard.IsKeyPressed Key.P

@@ -35,7 +35,7 @@ module TestKit =
           CellsZ = 64 }
 
     let soilWorld (mat: SoilMaterial) =
-        new World(defaultSeed, Sim.defaultThreadCount, Some(smallSoilConfig, mat, 2.0f))
+        new World(defaultSeed, Sim.defaultThreadCount, Some(FlatSoil(smallSoilConfig, mat, 2.0f)))
 
     /// Conservation check: volume scan + unbanked + live clumps vs ledger.
     /// Returns the largest relative error across materials.

@@ -9,39 +9,44 @@ open BepuPhysics.Constraints
 /// bucket) joined by hinges whose AngularAxisMotors are retuned every tick
 /// from the hydraulic model. Nothing is animated — stalls, sag, self-lift,
 /// and tipping all emerge from force caps and gravity.
-type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
+type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
     let simulation = physics.Simulation
+    let scale = rig.Scale
+    let massChassis, massHouse, massBoom, massStick, massBucket = rig.Masses
 
     // ---- assembly (spawned with the arm horizontal along +X; it sags onto
-    // its motors at startup, which reads as the machine "waking up") ----
-    let chassisCenter = origin + Vector3(0.0f, 0.45f, 0.0f)
-    let houseCenter = origin + Vector3(-0.15f, 0.85f, 0.0f)
-    let swingPivot = origin + Vector3(0.05f, 0.55f, 0.0f)
-    let boomPivot = origin + Vector3(0.45f, 0.75f, 0.0f)
-    let boomCenter = boomPivot + Vector3(0.95f, 0.0f, 0.0f)
-    let stickPivot = boomPivot + Vector3(1.9f, 0.0f, 0.0f)
-    let stickCenter = stickPivot + Vector3(0.55f, 0.0f, 0.0f)
-    let bucketPivot = stickPivot + Vector3(1.1f, 0.0f, 0.0f)
-    let bucketCenter = bucketPivot + Vector3(0.30f, 0.0f, 0.0f)
+    // its motors at startup, which reads as the machine "waking up").
+    // All layout offsets are the U17 reference × rig.Scale. ----
+    let chassisCenter = origin + Vector3(0.0f, 0.45f, 0.0f) * scale
+    let houseCenter = origin + Vector3(-0.15f, 0.85f, 0.0f) * scale
+    let swingPivot = origin + Vector3(0.05f, 0.55f, 0.0f) * scale
+    let boomPivot = origin + Vector3(0.45f, 0.75f, 0.0f) * scale
+    let boomCenter = boomPivot + Vector3(0.95f, 0.0f, 0.0f) * scale
+    let stickPivot = boomPivot + Vector3(1.9f, 0.0f, 0.0f) * scale
+    let stickCenter = stickPivot + Vector3(0.55f, 0.0f, 0.0f) * scale
+    let bucketPivot = stickPivot + Vector3(1.1f, 0.0f, 0.0f) * scale
+    let bucketCenter = bucketPivot + Vector3(0.30f, 0.0f, 0.0f) * scale
 
     let chassis =
-        Bepu.addDynamicBox simulation chassisCenter (Vector3(1.7f, 0.5f, 1.4f)) Tuning.u17Masses.Chassis
+        Bepu.addDynamicBox simulation chassisCenter (Vector3(1.7f, 0.5f, 1.4f) * scale) massChassis
 
     let house =
-        Bepu.addDynamicBox simulation houseCenter (Vector3(1.25f, 0.7f, 0.95f)) Tuning.u17Masses.House
+        Bepu.addDynamicBox simulation houseCenter (Vector3(1.25f, 0.7f, 0.95f) * scale) massHouse
 
     let boom =
-        Bepu.addDynamicBox simulation boomCenter (Vector3(1.9f, 0.18f, 0.15f)) Tuning.u17Masses.Boom
+        Bepu.addDynamicBox simulation boomCenter (Vector3(1.9f, 0.18f, 0.15f) * scale) massBoom
 
     let stick =
-        Bepu.addDynamicBox simulation stickCenter (Vector3(1.1f, 0.14f, 0.12f)) Tuning.u17Masses.Stick
+        Bepu.addDynamicBox simulation stickCenter (Vector3(1.1f, 0.14f, 0.12f) * scale) massStick
 
     // ponytail: single-box bucket (the open-plate compound is deferred —
     // the load-scalar payload made it unnecessary for bucket-fill). Note the
     // computed cutting edge extends ~0.15 m beyond this box: the edge point
     // carves/measures, the box collides.
+    let bucketSize = Vector3(0.5f, 0.4f, 0.6f) * scale
+
     let bucket =
-        Bepu.addDynamicBox simulation bucketCenter (Vector3(0.5f, 0.4f, 0.6f)) Tuning.u17Masses.Bucket
+        Bepu.addDynamicBox simulation bucketCenter bucketSize massBucket
 
     // Machine parts don't self-collide (collision group; RagdollDemo pattern).
     do
@@ -74,15 +79,19 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
 
     // ---- per-tick state (all preallocated; the tick path allocates nothing) ----
     let laggedAxes = Array.zeroCreate<float32> Hydraulics.FunctionCount
-    let circuitOf = [| 0; 1; 0; 2; 0; 1 |] // boom, stick, bucket, swing, trackL, trackR
+    // boom, stick, bucket, swing, trackL, trackR — clamped to the spec's
+    // circuit count (the Cat 320 has one big pump; the U17 has three).
+    let circuitOf =
+        let clamp c = min c (rig.Spec.Circuits.Length - 1)
+        [| clamp rig.BoomJoint.Circuit; clamp rig.StickJoint.Circuit; clamp rig.BucketJoint.Circuit; clamp 2; clamp 0; clamp 1 |]
 
     let qMax =
-        [| Tuning.u17BoomJoint.QMax
-           Tuning.u17StickJoint.QMax
-           Tuning.u17BucketJoint.QMax
-           Tuning.u17SwingQMax
-           Tuning.u17TrackQMax
-           Tuning.u17TrackQMax |]
+        [| rig.BoomJoint.QMax
+           rig.StickJoint.QMax
+           rig.BucketJoint.QMax
+           rig.SwingQMax
+           rig.TrackQMax
+           rig.TrackQMax |]
 
     let grantedFlow = Array.zeroCreate<float32> Hydraulics.FunctionCount
     let grantedScale = Array.zeroCreate<float32> Hydraulics.FunctionCount
@@ -96,8 +105,7 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
     let bucketLoad = Array.zeroCreate<float> 5
     let mutable lastInertiaMass = 0.0f
 
-    let joints =
-        [| Tuning.u17BoomJoint; Tuning.u17StickJoint; Tuning.u17BucketJoint |]
+    let joints = [| rig.BoomJoint; rig.StickJoint; rig.BucketJoint |]
 
     let motors = [| boomMotor; stickMotor; bucketMotor |]
     let motorAxes = [| Vector3.UnitZ; Vector3.UnitZ; Vector3.UnitZ |]
@@ -148,11 +156,16 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
         let up = Vector3.Transform(Vector3.UnitY, simulation.Bodies.[chassis].Pose.Orientation)
         MathF.Acos(Math.Clamp(Vector3.Dot(up, Vector3.UnitY), -1.0f, 1.0f))
 
+    member _.Rig = rig
+
     member _.BucketTipPosition =
         let bucketRef = simulation.Bodies.[bucket]
 
         bucketRef.Pose.Position
-        + Vector3.Transform(Vector3(Tuning.u17BucketTipRadius - 0.30f, -0.2f, 0.0f), bucketRef.Pose.Orientation)
+        + Vector3.Transform(
+            Vector3(rig.BucketTipRadius - 0.30f * scale, -0.2f * scale, 0.0f),
+            bucketRef.Pose.Orientation
+        )
 
     /// Lagged drive axis for a track side (0 = left, 1 = right).
     member _.TrackAxis(side: int) =
@@ -161,7 +174,10 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
     /// World-space point under a track's centerline.
     member _.TrackContactPoint(side: int) =
         let pose = simulation.Bodies.[chassis].Pose
-        let offsetLocal = Vector3(0.0f, -0.25f, (if side = 0 then -0.55f else 0.55f))
+
+        let offsetLocal =
+            Vector3(0.0f, -0.25f, (if side = 0 then -0.55f else 0.55f)) * scale
+
         pose.Position + Vector3.Transform(offsetLocal, pose.Orientation)
 
     /// Granted flow scale for a function this tick (1 = full speed): the
@@ -177,7 +193,7 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
 
     /// Absorb up to the remaining capacity; returns what was taken (kg).
     member _.TryAbsorb(mass: float, materialIndex: int) =
-        let space = Tuning.BucketCapacityKg - Array.sum bucketLoad
+        let space = rig.BucketCapacityKg - Array.sum bucketLoad
 
         if space <= 0.0 then
             0.0
@@ -189,7 +205,7 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
     /// Pour out one tick's worth of load if the bucket is open enough.
     /// Returns (kg, materialIndex) released, or ValueNone.
     member this.DumpTick() =
-        if this.BucketAngle > Tuning.DumpAngle && Array.sum bucketLoad > 1e-6 then
+        if this.BucketAngle > rig.DumpAngle && Array.sum bucketLoad > 1e-6 then
             // Release the heaviest material first (close enough to pouring).
             let mutable best = 0
 
@@ -197,7 +213,7 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
                 if bucketLoad.[i] > bucketLoad.[best] then
                     best <- i
 
-            let released = min Tuning.DumpRatePerTick bucketLoad.[best]
+            let released = min rig.DumpRatePerTick bucketLoad.[best]
             bucketLoad.[best] <- bucketLoad.[best] - released
             ValueSome(struct (released, best))
         else
@@ -209,8 +225,8 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
 
         if MathF.Abs(total - lastInertiaMass) > 4.0f then
             lastInertiaMass <- total
-            let shape = BepuPhysics.Collidables.Box(0.5f, 0.4f, 0.6f)
-            let mutable inertia = shape.ComputeInertia(Tuning.u17Masses.Bucket + total)
+            let shape = BepuPhysics.Collidables.Box(bucketSize.X, bucketSize.Y, bucketSize.Z)
+            let mutable inertia = shape.ComputeInertia(massBucket + total)
             simulation.Bodies.SetLocalInertia(bucket, &inertia)
             let mutable bucketRef = simulation.Bodies.[bucket]
 
@@ -253,6 +269,9 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
     /// Drive the machine one tick. Axes in `input` are raw -1..1; shaping
     /// (deadband → curve → valve lag) happens here so replays stay identical.
     member this.Step(input: InputFrame, dt: float32, surfaceHeight: float32 -> float32 -> float32) =
+        let spec = rig.Spec
+        ignore spec
+
         // 1. Shape inputs.
         laggedAxes.[Hydraulics.Boom] <-
             Hydraulics.lag laggedAxes.[Hydraulics.Boom] (Hydraulics.shapeAxis input.Boom) dt
@@ -273,11 +292,11 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
             Hydraulics.lag laggedAxes.[Hydraulics.TrackR] (Hydraulics.shapeAxis input.RightTrack) dt
 
         // 2. Flow sharing across circuits.
-        Hydraulics.allocate spec laggedAxes circuitOf qMax grantedFlow grantedScale circuitDemand
+        Hydraulics.allocate rig.Spec laggedAxes circuitOf qMax grantedFlow grantedScale circuitDemand
 
         // 3. Cylinder joints → motor commands.
         let relief circuit =
-            snd spec.Circuits.[min circuit (spec.Circuits.Length - 1)] * 1.0e6f
+            snd rig.Spec.Circuits.[min circuit (rig.Spec.Circuits.Length - 1)] * 1.0e6f
 
         for i in 0..2 do
             let joint = joints.[i]
@@ -310,8 +329,8 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
             3
             swingMotor
             Vector3.UnitY
-            (swingAxis * Tuning.u17SwingMaxVel * grantedScale.[Hydraulics.Swing])
-            Tuning.u17SwingTorque
+            (swingAxis * rig.SwingMaxVel * grantedScale.[Hydraulics.Swing])
+            rig.SwingTorque
 
         // 5. Tracks: velocity-servo tractive impulses at each track's ground
         // contact (Phase 0 verdict: BEPU has no conveyor surface velocity, so
@@ -327,13 +346,14 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
 
             if MathF.Abs axis > 0.0f then
                 let lateral = Vector3.Cross(Vector3.UnitY, forwardFlat)
-                let offsetLocal = Vector3(0.0f, -0.25f, (if side = 0 then -0.55f else 0.55f))
+                let offsetLocal =
+                    Vector3(0.0f, -0.25f, (if side = 0 then -0.55f else 0.55f)) * scale
                 let offsetWorld = Vector3.Transform(offsetLocal, pose.Orientation)
                 let contact = pose.Position + offsetWorld
                 let ground = surfaceHeight contact.X contact.Z
 
                 // Only drive when that track is actually near the ground.
-                if contact.Y - ground < 0.35f then
+                if contact.Y - ground < 0.35f * scale then
                     if not chassisRef.Awake then
                         chassisRef.Awake <- true
 
@@ -343,13 +363,13 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
                     let currentSpeed = Vector3.Dot(pointVelocity, forwardFlat)
 
                     let target =
-                        axis * Tuning.u17TrackMaxSpeed * grantedScale.[if side = 0 then 4 else 5]
+                        axis * rig.TrackMaxSpeed * grantedScale.[if side = 0 then 4 else 5]
 
                     let force =
                         Math.Clamp(
-                            (target - currentSpeed) * Tuning.u17TrackGain,
-                            -Tuning.u17TrackMaxForce,
-                            Tuning.u17TrackMaxForce
+                            (target - currentSpeed) * rig.TrackGain,
+                            -rig.TrackMaxForce,
+                            rig.TrackMaxForce
                         )
 
                     let impulse = forwardFlat * (force * dt)
@@ -360,7 +380,7 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
                     let lateralSpeed = Vector3.Dot(pointVelocity, lateral)
 
                     let lateralForce =
-                        Math.Clamp(-lateralSpeed * Tuning.u17TrackGain, -Tuning.u17TrackMaxForce, Tuning.u17TrackMaxForce)
+                        Math.Clamp(-lateralSpeed * rig.TrackGain, -rig.TrackMaxForce, rig.TrackMaxForce)
 
                     chassisRef.ApplyImpulse(lateral * (lateralForce * dt), offsetWorld)
 
@@ -368,6 +388,7 @@ type Machine(physics: Physics, spec: MachineSpec, origin: Vector3) =
     member this.FillSnapshot(snapshot: RenderSnapshot) =
         let parts = partsScratch
         snapshot.MachinePartCount <- parts.Length
+        snapshot.MachineScale <- scale
 
         for i in 0 .. parts.Length - 1 do
             let bodyRef = simulation.Bodies.[parts.[i]]
