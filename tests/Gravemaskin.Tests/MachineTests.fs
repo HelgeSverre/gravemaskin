@@ -197,7 +197,13 @@ let ``a heavy over-side load tips the machine; unloaded it stays level`` () =
         stepWithTipLoad world machine InputFrame.empty loadN 500
         machine.ChassisTilt
 
-    Assert.True(tiltAfter 3800.0f > 0.5f, $"390 kg over the side should tip: tilt {tiltAfter 3800.0f}")
+    // The load hangs at the PHYSICAL teeth (the mouth-side lip, ~0.85 m
+    // closer in than the old heel probe), so tipping needs more weight —
+    // and full rollover is ARRESTED by the sagging bucket grounding and
+    // propping the machine, exactly as on a real excavator. The contract:
+    // the near track lifts well clear (>17° roll) under load, dead level
+    // without it.
+    Assert.True(tiltAfter 5600.0f > 0.3f, $"570 kg over the side should lift a track: tilt {tiltAfter 5600.0f}")
     Assert.True(tiltAfter 0.0f < 0.15f, $"unloaded machine should stay level: tilt {tiltAfter 0.0f}")
 
 [<Fact>]

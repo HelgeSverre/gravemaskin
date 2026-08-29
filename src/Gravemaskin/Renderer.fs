@@ -350,10 +350,13 @@ void main()
            2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.1f, 0.24f, 0.2f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // boom pivot boss
            3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.08f, 0.19f, 0.16f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // stick pivot boss
            4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // bucket pivot boss
-           4, Vector3(0.3f, -0.2f, -0.2f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
-           4, Vector3(0.3f, -0.2f, -0.067f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
-           4, Vector3(0.3f, -0.2f, 0.067f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
-           4, Vector3(0.3f, -0.2f, 0.2f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
+           // Teeth live on the MOUTH lip (-X side, where the physics
+           // cutting edge is), extended past a hardened lip plate.
+           4, Vector3(-0.27f, -0.18f, 0.0f), Vector3(0.08f, 0.05f, 0.58f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // lip plate
+           4, Vector3(-0.36f, -0.21f, -0.2f), Vector3(0.16f, 0.05f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
+           4, Vector3(-0.36f, -0.21f, -0.067f), Vector3(0.16f, 0.05f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
+           4, Vector3(-0.36f, -0.21f, 0.067f), Vector3(0.16f, 0.05f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
+           4, Vector3(-0.36f, -0.21f, 0.2f), Vector3(0.16f, 0.05f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
            4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), Vector3(0.2f, 0.2f, 0.22f), bucketTilt // bucket floor
            4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), Vector3(0.2f, 0.2f, 0.22f), bucketTilt // bucket back
            4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), Vector3(0.22f, 0.22f, 0.24f), bucketTilt // bucket shell top
@@ -408,10 +411,11 @@ void main()
            3, Vector3(-0.2f, 0.0f, 0.0f), Vector3(0.75f, 0.17f, 0.14f), white, 0.0f
            3, Vector3(0.33f, 0.0f, 0.0f), Vector3(0.5f, 0.13f, 0.12f), whiteDim, -0.06f
            // bucket: dark steel, existing tilt convention
-           4, Vector3(0.3f, -0.2f, -0.2f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
-           4, Vector3(0.3f, -0.2f, -0.067f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
-           4, Vector3(0.3f, -0.2f, 0.067f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
-           4, Vector3(0.3f, -0.2f, 0.2f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
+           4, Vector3(-0.27f, -0.18f, 0.0f), Vector3(0.08f, 0.05f, 0.58f), steel * 0.9f, bucketTilt
+           4, Vector3(-0.36f, -0.21f, -0.2f), Vector3(0.16f, 0.05f, 0.05f), steel * 0.8f, bucketTilt
+           4, Vector3(-0.36f, -0.21f, -0.067f), Vector3(0.16f, 0.05f, 0.05f), steel * 0.8f, bucketTilt
+           4, Vector3(-0.36f, -0.21f, 0.067f), Vector3(0.16f, 0.05f, 0.05f), steel * 0.8f, bucketTilt
+           4, Vector3(-0.36f, -0.21f, 0.2f), Vector3(0.16f, 0.05f, 0.05f), steel * 0.8f, bucketTilt
            4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), grey * 0.8f, bucketTilt
            4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), grey * 0.8f, bucketTilt
            4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), grey * 0.9f, bucketTilt
@@ -440,7 +444,12 @@ void main()
            // pivot pins (axis Z)
            2, Vector3(-0.95f, 0.0f, 0.0f), 0.3f, 0.22f, steel, 2
            3, Vector3(-0.55f, 0.0f, 0.0f), 0.24f, 0.18f, steel, 2
-           4, Vector3(-0.28f, 0.0f, 0.0f), 0.24f, 0.16f, steel, 2 |]
+           4, Vector3(-0.28f, 0.0f, 0.0f), 0.24f, 0.16f, steel, 2
+           // cab roof beacon (axis Y)
+           1, Vector3(0.4f, 1.0f, -0.35f), 0.12f, 0.09f, Vector3(0.85f, 0.45f, 0.1f), 1
+           // counterweight lifting bosses (axis Z)
+           1, Vector3(-0.85f, 0.3f, -0.25f), 0.06f, 0.1f, steel, 0
+           1, Vector3(-0.85f, 0.3f, 0.25f), 0.06f, 0.1f, steel, 0 |]
 
     let genericCylinders: (int * Vector3 * float32 * float32 * Vector3 * int)[] = [||]
 
@@ -1245,7 +1254,8 @@ void main()
 
             let radius = current.Radius.[i]
             let baseColor = materialColor current.Materials.[i]
-            let pieces = Math.Clamp(int (radius * 130.0f), 10, 44)
+            // Fine wads: many small pieces, none bead-sized.
+            let pieces = Math.Clamp(int (radius * 260.0f), 16, 72)
 
             for k in 0 .. pieces - 1 do
                 let seed = handle * 31 + k
@@ -1258,7 +1268,7 @@ void main()
                     (px + ox)
                     (py + oy)
                     (pz + oz)
-                    (radius * (0.22f + hash01 (seed + 404) * 0.16f))
+                    (radius * (0.11f + hash01 (seed + 404) * 0.09f))
                     (baseColor * tint)
 
         if grainInstances > 0 then

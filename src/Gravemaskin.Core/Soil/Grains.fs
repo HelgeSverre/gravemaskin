@@ -98,9 +98,9 @@ type GrainPool(capacity: int, state: SoilState) =
 
         // Grain size by material: sand fine, gravel chunky.
         let baseSize =
-            if props.FrictionAngle > 0.72f then 0.017f // gravel
-            elif props.Cohesion > 3.0f<kPa> then 0.013f // clay/turf: crumbs
-            else 0.009f // sands, topsoil
+            if props.FrictionAngle > 0.72f then 0.013f // gravel
+            elif props.Cohesion > 3.0f<kPa> then 0.010f // clay/turf: crumbs
+            else 0.007f // sands, topsoil
 
         for _ in 1..grains do
             let jitterVelocity =
@@ -150,7 +150,7 @@ type GrainPool(capacity: int, state: SoilState) =
                         + velocitiesZ.[i] * velocitiesZ.[i]
 
                     // Wet grains splat; dry ones bounce a little.
-                    let restitution = if wetness.[i] > 128uy then 0.02f else 0.18f
+                    let restitution = if wetness.[i] > 128uy then 0.02f else 0.10f
 
                     if speedSq < 0.25f then
                         // Rest and stack: deposit into the pile field.
@@ -176,7 +176,7 @@ type GrainPool(capacity: int, state: SoilState) =
                             this.GroundHeight(positionsX.[i], positionsZ.[i] + step)
                             - this.GroundHeight(positionsX.[i], positionsZ.[i] - step)
 
-                        let friction = if wetness.[i] > 128uy then 0.45f else 0.72f
+                        let friction = if wetness.[i] > 128uy then 0.45f else 0.60f
                         velocitiesX.[i] <- velocitiesX.[i] * friction - gradientX * 1.6f
                         velocitiesZ.[i] <- velocitiesZ.[i] * friction - gradientZ * 1.6f
 

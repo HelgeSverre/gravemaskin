@@ -254,9 +254,25 @@ module Tuning =
     let FeeSmoothing = 0.25f
     /// Cutting geometry: effective blade width and carve radius per tick.
     let CutWidth = 0.6f
-    let CutRadius = 0.28f
+    let CutRadius = 0.34f  // kerf wider than the shell: teeth + side cutters clear the shell's own footprint
     /// Minimum edge speed (m/s) that counts as cutting.
     let CutMinSpeed = 0.12f
+
+    /// Bucket shell tilt (rad, about local Z): the bowl sits rotated so the
+    /// mouth faces down-and-forward at rest — shared by the collision
+    /// compound, the cutting-edge frame, and the renderer.
+    let BucketTilt = 0.785f
+
+    /// Mouth-gate: the cutting edge only FILLS the bucket when the mouth
+    /// leads the motion by at least this fraction of edge speed (soil shears
+    /// over the lip into the bowl). Below it, the bucket back-drags:
+    /// carved soil churns around the shell instead of being captured.
+    let MouthLeadFraction = 0.15f
+
+    /// Fill rate cap (kg/tick): soil shears over the lip at a finite rate —
+    /// a bucket fills over a stroke, it doesn't inhale a carve sphere in
+    /// one tick. 1.2 kg/tick ≈ filling the U17's 70 kg in ~1 s of cutting.
+    let BucketFillPerTick = 1.2
     /// U17 bucket payload ceiling (kg, loose) — ~0.05 m³ heaped.
     let BucketCapacityKg = 70.0
     /// Dump release rate (kg per tick) once the bucket opens — ~1 s to

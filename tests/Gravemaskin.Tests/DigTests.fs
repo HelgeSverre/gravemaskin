@@ -38,11 +38,14 @@ let ``full dig-swing-dump cycle: payload fills, pours out, mass conserved`` () =
 
     let startSurface = regionMin ()
 
-    // Curl in the dirt, boom down, crowd the stick — the scripted dig pass
-    // (script validated interactively; the assertions are the contract).
-    TestKit.stepAll 60 (inp 0.0f 0.0f -1.0f 0.0f) world |> ignore
+    // The real dig stroke (script validated interactively; the assertions
+    // are the contract): boom down with the bucket OPEN so the teeth bite,
+    // crowd the bench, then curl through the face — the mouth gate only
+    // fills while soil shears over the lip into the bowl, and the tilted
+    // shell only retains once the mouth passes horizontal.
     TestKit.stepAll 90 (inp -1.0f 0.0f 0.0f 0.0f) world |> ignore
-    TestKit.stepAll 240 (inp 0.0f -1.0f -0.6f 0.0f) world |> ignore
+    TestKit.stepAll 120 (inp 0.0f -1.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 180 (inp 0.0f -0.5f -1.0f 0.0f) world |> ignore
 
     Assert.True(machine.BucketLoadKg > 20.0, $"bucket should fill while digging: {machine.BucketLoadKg} kg")
 
@@ -64,9 +67,10 @@ let ``full dig-swing-dump cycle: payload fills, pours out, mass conserved`` () =
 let ``payload makes the bucket heavier for the hydraulics`` () =
     let world, machine = digWorld Topsoil
     use _ = world
-    // Dig until loaded.
-    TestKit.stepAll 60 (inp 0.0f 0.0f -1.0f 0.0f) world |> ignore
+    // Dig until loaded: bite, crowd the bench, curl through to fill.
     TestKit.stepAll 90 (inp -1.0f 0.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 120 (inp 0.0f -1.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 180 (inp 0.0f -0.5f -1.0f 0.0f) world |> ignore
     Assert.True(machine.BucketLoadKg > 20.0)
     // The inertia refresh must have pushed the payload into the body.
     let inertia = world.Physics.Simulation.Bodies.[machine.Bucket].LocalInertia
@@ -92,15 +96,17 @@ let ``deep wet sand stalls the stick while the swing keeps moving`` () =
     // force caps interacting, per the MVP gate.
     let world, machine = digWorld WetSand
     use _ = world
-    // Bury the edge deep.
-    TestKit.stepAll 60 (inp 0.0f 0.0f -1.0f 0.0f) world |> ignore
-    TestKit.stepAll 140 (inp -1.0f 0.0f 0.0f 0.0f) world |> ignore
+    // Bury the edge deep with the bucket OPEN (teeth pointing down bite;
+    // a pre-curled shell just rides the surface).
+    TestKit.stepAll 220 (inp -1.0f 0.0f 0.0f 0.0f) world |> ignore
 
     let mutable stallSeen = false
     let stickBefore = machine.StickAngle
 
     for _ in 1..300 do
-        world.Step(inp 0.0f -1.0f 0.0f 0.3f) |> ignore
+        // Crowd + curl together (the real dig stroke): the curl keeps the
+        // tilted shell's edge engaged while the stick drives the cut.
+        world.Step(inp 0.0f -1.0f -0.6f 0.3f) |> ignore
 
         if world.Events.Contains HydraulicStall then
             stallSeen <- true
@@ -253,11 +259,14 @@ let ``a curled bucket scoops loose clumps into the payload`` () =
     // to payload mass (clump budget freed, weight still on the linkage).
     let world, machine = digWorld Topsoil
     use _ = world
-    // Fill by digging, dump nearby to make a loose pile, then re-scoop it.
-    TestKit.stepAll 60 (inp 0.0f 0.0f -1.0f 0.0f) world |> ignore
+    // Fill by digging (bite, crowd, curl through — the real stroke), dump
+    // nearby to make a loose pile, then re-scoop it.
+    TestKit.stepAll 90 (inp -1.0f 0.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 120 (inp 0.0f -1.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 180 (inp 0.0f -0.5f -1.0f 0.0f) world |> ignore
     Assert.True(machine.BucketLoadKg > 20.0)
-    TestKit.stepAll 90 (inp 1.0f 0.0f 0.0f 0.0f) world |> ignore
-    TestKit.stepAll 150 (inp 0.0f 0.0f 1.0f 0.0f) world |> ignore
+    TestKit.stepAll 120 (inp 1.0f 0.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 280 (inp 0.0f 0.0f 1.0f 0.0f) world |> ignore
     let afterDump = machine.BucketLoadKg
     Assert.True(afterDump < 5.0, $"dumped: {afterDump} kg left")
 

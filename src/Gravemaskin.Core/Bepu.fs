@@ -153,9 +153,14 @@ module Bepu =
         let thickness = size.Y * 0.15f
         let mutable builder = new CompoundBuilder(pool, simulation.Shapes, 5)
 
+        // The whole shell is tilted by BucketTilt so the PHYSICAL mouth
+        // matches the visual one (down-and-forward at rest) — the collision
+        // container used to stay axis-aligned under a rotated skin.
+        let tilt = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, Tuning.BucketTilt)
+
         let addPlate (plateSize: Vector3) (offset: Vector3) (weight: float32) =
             let shape = Box(plateSize.X, plateSize.Y, plateSize.Z)
-            let pose = RigidPose(offset)
+            let pose = RigidPose(Vector3.Transform(offset, tilt), tilt)
             builder.Add(&shape, &pose, weight)
 
         addPlate (Vector3(size.X, thickness, size.Z)) (Vector3(0.0f, -(size.Y - thickness) * 0.5f, 0.0f)) (mass * 0.32f)

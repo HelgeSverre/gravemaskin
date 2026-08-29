@@ -169,8 +169,10 @@ let ``machine swap despawns cleanly and the replacement digs`` () =
     let first = world.SpawnMachineRig(Tuning.tb216Rig, Vector3(8.0f, 0.0f, 8.0f))
     TestKit.stepAll 60 InputFrame.empty world |> ignore
 
-    // Load the bucket so the swap has payload to account for.
-    TestKit.stepAll 60 { InputFrame.empty with Bucket = -1.0f } world |> ignore
+    // Load the bucket so the swap has payload to account for — the real
+    // stroke: bite with the bucket open, then curl through the face.
+    TestKit.stepAll 90 { InputFrame.empty with Boom = -1.0f } world |> ignore
+    TestKit.stepAll 180 { InputFrame.empty with Stick = -0.5f; Bucket = -1.0f } world |> ignore
     Assert.True(first.BucketLoadKg > 5.0)
 
     let bodiesBefore = world.Physics.Simulation.Bodies.ActiveSet.Count

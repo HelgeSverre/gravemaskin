@@ -394,16 +394,19 @@ let main args =
             if menuOpen then
                 InputFrame.empty
             elif demoMode then
-                // Scripted dig-swing-dump loop for demos and screenshots.
+                // Scripted dig-swing-dump loop for demos and screenshots —
+                // the real stroke: bite with the bucket open, crowd the
+                // bench, curl through to fill, lift, swing, pour.
                 match (world.Tick / 110L) % 8L with
-                | 0L -> { InputFrame.empty with Bucket = -1.0f }
-                | 1L -> { InputFrame.empty with Boom = -1.0f }
-                | 2L ->
+                | 0L -> { InputFrame.empty with Boom = -1.0f }
+                | 1L -> { InputFrame.empty with Stick = -1.0f }
+                | 2L
+                | 3L ->
                     { InputFrame.empty with
-                        Stick = -1.0f
-                        Bucket = -0.5f }
-                | 3L -> { InputFrame.empty with Boom = 1.0f }
-                | 4L -> { InputFrame.empty with Swing = 0.8f }
+                        Stick = -0.5f
+                        Bucket = -1.0f }
+                | 4L -> { InputFrame.empty with Boom = 1.0f; Bucket = -0.3f }
+                | 5L -> { InputFrame.empty with Swing = 0.8f }
                 | _ -> { InputFrame.empty with Bucket = 1.0f } // long open: pour it all
             elif flyMode then
                 InputFrame.empty
@@ -541,7 +544,7 @@ let main args =
                             else
                                 Vector3.Zero
 
-                        grains.SpawnBurst(tip, tipVelocity * 0.6f + intoMouth, 0.7f, tipMaterial, moistByte, 70)
+                        grains.SpawnBurst(tip, tipVelocity * 0.5f + intoMouth, 0.4f, tipMaterial, moistByte, 22)
                     | WallCollapsed ->
                         // The wedge clumps burst into clusters on their own;
                         // add a dust breath at the machine's general area.
@@ -560,11 +563,11 @@ let main args =
 
                             grains.SpawnBurst(
                                 Vector3(contact.X, ground + 0.06f, contact.Z),
-                                Vector3(0.0f, 0.7f, 0.0f),
-                                0.8f,
+                                Vector3(0.0f, 0.5f, 0.0f),
+                                0.6f,
                                 Volume.materialOfByte trackMat,
                                 trackMoist,
-                                6
+                                4
                             )
             | None -> ()
 

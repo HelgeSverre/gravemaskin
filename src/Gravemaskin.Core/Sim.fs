@@ -192,7 +192,19 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             let edge = m.BucketTipPosition
             let edgeVelocity = m.CuttingEdgeVelocity
             let surface = Soil.surfaceHeight state edge.X edge.Z
-            let depth = surface - edge.Y
+
+            // Cut depth is measured against the BENCH AHEAD of the edge,
+            // not the pothole the edge just carved under itself — the face
+            // being sheared is what resists (and what the teeth attack).
+            let depth =
+                let horizontal = Vector3(edgeVelocity.X, 0.0f, edgeVelocity.Z)
+
+                if horizontal.LengthSquared() > 1e-4f then
+                    let ahead = edge + Vector3.Normalize horizontal * 0.3f
+                    max (surface - edge.Y) (Soil.surfaceHeight state ahead.X ahead.Z - edge.Y)
+                else
+                    surface - edge.Y
+
             let speed = edgeVelocity.Length()
             let mutable targetForce = Vector3.Zero
 
@@ -210,12 +222,33 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
                 let removed = Soil.carveSphere state edge Tuning.CutRadius carveScratch
 
+                // Mouth gate: soil shears over the lip into the bowl only
+                // when the open face leads the motion (a curl-through cut).
+                // Otherwise the shell back-drags: the carve still churns
+                // the ground, but everything berms at the edge instead of
+                // teleporting into the payload.
+                let mouthLeads =
+                    Vector3.Dot(edgeVelocity, m.MouthDirection) > speed * Tuning.MouthLeadFraction
+
+                // Soil shears over the lip at a finite rate; one budget
+                // across all materials per tick.
+                let mutable fillBudget = if mouthLeads then Tuning.BucketFillPerTick else 0.0
+
                 if removed > 0.0 then
                     events.Add DigStarted
 
                     for materialIndex in 0 .. MaterialCount - 1 do
                         if carveScratch.[materialIndex] > 0.0 then
-                            let absorbed = m.TryAbsorb(carveScratch.[materialIndex], materialIndex)
+                            let absorbed =
+                                if fillBudget > 0.0 then
+                                    let taken =
+                                        m.TryAbsorb(min carveScratch.[materialIndex] fillBudget, materialIndex)
+
+                                    fillBudget <- fillBudget - taken
+                                    taken
+                                else
+                                    0.0
+
                             let spill = carveScratch.[materialIndex] - absorbed
 
                             // Sub-clump spill still exists: bank it in the
@@ -225,7 +258,19 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                                 Soil.creditUnbanked state materialIndex spill
 
                             if spill > 0.001 then
-                                // Overflow spills over the bucket as clumps.
+                                // Un-captured carve gets PUSHED AHEAD of
+                                // the cut (the blade's push-mound), not
+                                // dropped back into it: spawn the loose
+                                // clumps displaced along the edge's motion
+                                // so berms build on uncut ground.
+                                let pushAhead =
+                                    let horizontal = Vector3(edgeVelocity.X, 0.0f, edgeVelocity.Z)
+
+                                    if horizontal.LengthSquared() > 1e-4f then
+                                        Vector3.Normalize horizontal * 0.5f
+                                    else
+                                        Vector3.Zero
+
                                 let jitter =
                                     Vector3(
                                         (Rng.nextFloat32 &rng - 0.5f) * 0.4f,
@@ -234,7 +279,9 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                                     )
 
                                 this.SpawnClump(
-                                    Vector3(edge.X, max surface (edge.Y + Tuning.CutRadius), edge.Z) + jitter,
+                                    Vector3(edge.X, max surface (edge.Y + Tuning.CutRadius), edge.Z)
+                                    + pushAhead
+                                    + jitter,
                                     Vector3.Zero,
                                     spill,
                                     Volume.materialOfByte (byte materialIndex)

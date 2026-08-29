@@ -181,11 +181,32 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
     member _.BucketTipPosition =
         let bucketRef = simulation.Bodies.[bucket]
 
-        bucketRef.Pose.Position
-        + Vector3.Transform(
-            Vector3(rig.BucketTipRadius - 0.30f * scale, -0.2f * scale, 0.0f),
-            bucketRef.Pose.Orientation
-        )
+        // The cutting edge is the TEETH: they protrude past the mouth lip
+        // (local −X side), so they reach below the surface while the shell
+        // still rests on it — the carve then removes the support and the
+        // bucket sinks in. A probe inside the shell footprint can never
+        // start a cut against rigid terrain collision.
+        let tipLocal =
+            Vector3.Transform(
+                Vector3(-(rig.BucketTipRadius - 0.25f * scale), -0.2f * scale, 0.0f),
+                Quaternion.CreateFromAxisAngle(Vector3.UnitZ, Tuning.BucketTilt)
+            )
+
+        bucketRef.Pose.Position + Vector3.Transform(tipLocal, bucketRef.Pose.Orientation)
+
+    /// Outward normal of the bucket's open face (local −X, tilted with the
+    /// shell). Soil only shears over the lip INTO the bowl when this leads
+    /// the edge's motion.
+    member _.MouthDirection =
+        let bucketRef = simulation.Bodies.[bucket]
+
+        let mouthLocal =
+            Vector3.Transform(
+                -Vector3.UnitX,
+                Quaternion.CreateFromAxisAngle(Vector3.UnitZ, Tuning.BucketTilt)
+            )
+
+        Vector3.Transform(mouthLocal, bucketRef.Pose.Orientation)
 
     /// Lagged drive axis for a track side (0 = left, 1 = right).
     member _.TrackAxis(side: int) =
@@ -212,15 +233,23 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
     member _.BucketLoadKg = Array.sum bucketLoad
 
     /// Absorb up to the remaining capacity; returns what was taken (kg).
+    /// Negative mass gives load back (a revert), bounded by what's loaded —
+    /// the old early-return on a full bucket silently dropped reverts and
+    /// double-counted the mass.
     member _.TryAbsorb(mass: float, materialIndex: int) =
-        let space = rig.BucketCapacityKg - Array.sum bucketLoad
-
-        if space <= 0.0 then
-            0.0
+        if mass < 0.0 then
+            let returned = min -mass bucketLoad.[materialIndex]
+            bucketLoad.[materialIndex] <- bucketLoad.[materialIndex] - returned
+            -returned
         else
-            let taken = min mass space
-            bucketLoad.[materialIndex] <- bucketLoad.[materialIndex] + taken
-            taken
+            let space = rig.BucketCapacityKg - Array.sum bucketLoad
+
+            if space <= 0.0 then
+                0.0
+            else
+                let taken = min mass space
+                bucketLoad.[materialIndex] <- bucketLoad.[materialIndex] + taken
+                taken
 
     /// Pour out one tick's worth of load if the bucket is open enough.
     /// Returns (kg, materialIndex) released, or ValueNone.
