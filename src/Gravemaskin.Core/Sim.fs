@@ -234,6 +234,30 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
                 bucketRef.ApplyImpulse(feeForce * Tuning.FixedDt, edge - bucketRef.Pose.Position)
 
+            // Scoop: loose clumps cradled inside a well-curled bucket
+            // convert to payload (the training-sim trick — clump budget
+            // freed, weight still on the linkage).
+            if m.BucketAngle < -1.0f then
+                let bucketCenter = physics.Simulation.Bodies.[m.Bucket].Pose.Position
+                let mouthRadius = 0.45f * m.Rig.Scale
+                let mutable i = 0
+
+                while i < clumps.Count do
+                    let clumpPosition = physics.Simulation.Bodies.[clumps.Handles.[i]].Pose.Position
+
+                    if Vector3.DistanceSquared(clumpPosition, bucketCenter) < mouthRadius * mouthRadius then
+                        let taken = m.TryAbsorb(clumps.Masses.[i], int clumps.Materials.[i])
+
+                        if taken >= clumps.Masses.[i] - 1e-9 then
+                            clumps.RemoveAt(physics.Simulation, i)
+                        else
+                            // No room: leave it be (partial absorb would
+                            // need a mass edit on a live body).
+                            m.TryAbsorb(-taken, int clumps.Materials.[i]) |> ignore
+                            i <- i + 1
+                    else
+                        i <- i + 1
+
             // Pour the payload out of an open bucket.
             match m.DumpTick() with
             | ValueSome(released, materialIndex) ->

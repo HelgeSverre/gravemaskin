@@ -203,3 +203,58 @@ let ``digging a loaded world still allocates nothing`` () =
     // the optimizer removes. `just perf` runs this in Release.
     if TestKit.isReleaseBuild then
         Assert.True(allocated < 2048L, $"steady-state digging allocated {allocated} bytes over 600 ticks")
+
+[<Fact>]
+let ``a curled bucket physically cradles a clump-sized body`` () =
+    // The open-plate compound at work: drop a ball into a deep-curled
+    // bucket held off the ground — it must stay in the bucket, not roll out.
+    let world = Sim.createWorld TestKit.defaultSeed
+    use _ = world
+    let machine = world.SpawnMachine(Vector3.Zero)
+    TestKit.stepAll 60 InputFrame.empty world |> ignore
+    // Raise the boom, then curl deep.
+    TestKit.stepAll 180 (inp 1.0f 0.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 240 (inp 0.0f 0.0f -1.0f 0.0f) world |> ignore
+    Assert.True(machine.BucketAngle < -1.5f, $"bucket should be curled: {machine.BucketAngle}")
+
+    // Spawn inside the cavity (the compound's COM sits in it), with a
+    // nudge toward the opening's interior — a vertical drop from above can
+    // glance off a plate edge and miss.
+    let bucketRef = world.Physics.Simulation.Bodies.[machine.Bucket]
+
+    let dropPoint =
+        bucketRef.Pose.Position
+        + Vector3.Transform(Vector3(-0.05f, 0.08f, 0.0f), bucketRef.Pose.Orientation)
+
+    let ball = Bepu.addDynamicSphere world.Physics.Simulation dropPoint 0.09f 8.0f
+    TestKit.stepAll 300 (inp 0.0f 0.0f 0.0f 0.0f) world |> ignore
+
+    let ballPosition = world.Physics.Simulation.Bodies.[ball].Pose.Position
+    let bucketCenter = world.Physics.Simulation.Bodies.[machine.Bucket].Pose.Position
+    let distance = Vector3.Distance(ballPosition, bucketCenter)
+    Assert.True(distance < 0.55f, $"the ball should rest IN the bucket: {distance} m from center")
+    Assert.True(ballPosition.Y > 0.5f, $"held aloft, not on the ground: y {ballPosition.Y}")
+
+[<Fact>]
+let ``a curled bucket scoops loose clumps into the payload`` () =
+    // Soil world: spill clumps, curl the bucket around them → they convert
+    // to payload mass (clump budget freed, weight still on the linkage).
+    let world, machine = digWorld Topsoil
+    use _ = world
+    // Fill by digging, dump nearby to make a loose pile, then re-scoop it.
+    TestKit.stepAll 60 (inp 0.0f 0.0f -1.0f 0.0f) world |> ignore
+    Assert.True(machine.BucketLoadKg > 20.0)
+    TestKit.stepAll 90 (inp 1.0f 0.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 150 (inp 0.0f 0.0f 1.0f 0.0f) world |> ignore
+    let afterDump = machine.BucketLoadKg
+    Assert.True(afterDump < 5.0, $"dumped: {afterDump} kg left")
+
+    // Bring the bucket down into the spill and curl.
+    TestKit.stepAll 120 (inp -1.0f 0.0f -0.6f 0.0f) world |> ignore
+    TestKit.stepAll 240 (inp 0.0f -0.4f -1.0f 0.0f) world |> ignore
+
+    Assert.True(
+        machine.BucketLoadKg > afterDump + 5.0,
+        $"re-scooping the pile should refill the payload: {machine.BucketLoadKg} kg"
+    )
+    Assert.True(TestKit.conservationError world < 1e-6)

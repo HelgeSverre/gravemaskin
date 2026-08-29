@@ -126,6 +126,48 @@ module Bepu =
 
         simulation.Bodies.Add(&desc)
 
+    /// Open-top bucket: a dynamic compound of four plates (bottom, back,
+    /// two sides). The opening faces −X/+Y in local space: curl is a −Z
+    /// rotation, which swings a −X opening upward — so a curled bucket
+    /// cradles clumps and a dumped one pours them (a +X opening does the
+    /// exact opposite; found out empirically).
+    let addDynamicOpenBucket
+        (simulation: Simulation)
+        (pool: BepuUtilities.Memory.BufferPool)
+        (position: Vector3)
+        (size: Vector3)
+        (mass: float32)
+        =
+        let thickness = size.Y * 0.15f
+        let mutable builder = new CompoundBuilder(pool, simulation.Shapes, 4)
+
+        let addPlate (plateSize: Vector3) (offset: Vector3) (weight: float32) =
+            let shape = Box(plateSize.X, plateSize.Y, plateSize.Z)
+            let pose = RigidPose(offset)
+            builder.Add(&shape, &pose, weight)
+
+        addPlate (Vector3(size.X, thickness, size.Z)) (Vector3(0.0f, -(size.Y - thickness) * 0.5f, 0.0f)) (mass * 0.4f)
+        addPlate (Vector3(thickness, size.Y, size.Z)) (Vector3((size.X - thickness) * 0.5f, 0.0f, 0.0f)) (mass * 0.3f)
+        addPlate (Vector3(size.X, size.Y, thickness)) (Vector3(0.0f, 0.0f, -(size.Z - thickness) * 0.5f)) (mass * 0.15f)
+        addPlate (Vector3(size.X, size.Y, thickness)) (Vector3(0.0f, 0.0f, (size.Z - thickness) * 0.5f)) (mass * 0.15f)
+
+        let mutable children = Unchecked.defaultof<BepuUtilities.Memory.Buffer<CompoundChild>>
+        let mutable inertia = Unchecked.defaultof<BodyInertia>
+        let mutable center = Vector3.Zero
+        builder.BuildDynamicCompound(&children, &inertia, &center)
+        builder.Dispose()
+        let mutable compound = Compound(children)
+
+        let desc =
+            BodyDescription.CreateDynamic(
+                RigidPose(position + center),
+                inertia,
+                CollidableDescription(simulation.Shapes.Add(&compound)),
+                BodyActivityDescription(0.01f)
+            )
+
+        simulation.Bodies.Add(&desc)
+
     let addKinematicSphere (simulation: Simulation) (position: Vector3) (radius: float32) =
         let shape = Sphere(radius)
 

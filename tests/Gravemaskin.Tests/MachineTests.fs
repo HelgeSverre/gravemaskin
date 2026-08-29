@@ -93,15 +93,19 @@ let ``boom torque ceiling emerges from pressure × area × moment arm`` () =
 
 [<Fact>]
 let ``bucket breakout torque emerges within spec brackets`` () =
-    // Published U17 breakout 15.2 kN at 0.7 m tip ⇒ ~10.6 kN·m at the joint.
-    // Through the working range the linkage cap runs ≈ 9.4→11 kN·m: curling
-    // from −0.4 must beat 8.5 kN·m of resistance and stall against 13 kN·m —
-    // purely pressure × area × moment arm, never hardcoded.
-    let curlAgainst (resistTorque: float32) =
+    // Published U17 breakout 15.2 kN at 0.7 m tip ⇒ ~10.6 kN·m at the
+    // joint; the linkage cap runs ≈ 9.4→11 kN·m through the working range.
+    // Resistance is a Coulomb brake (constant torque opposing joint motion,
+    // dead in a ±0.02 rad/s band): passive by construction, so it can't
+    // fling the light plate-compound bucket the way driven torque did.
+    // Motor cap > brake ⇒ the curl grinds on; cap < brake ⇒ it stops.
+    let curlAgainst (brakeTorque: float32) =
         let world, machine = machineWorld ()
         use _ = world
+        // Hold the bucket clear of the ground so soil/slab contact doesn't
+        // add its own brake.
+        TestKit.stepAll 150 (input 1.0f 0.0f 0.0f 0.0f 0.0f 0.0f) world |> ignore
 
-        // Free-curl into the strong part of the range first.
         let mutable guard = 0
 
         while machine.BucketAngle > -0.4f && guard < 300 do
@@ -109,19 +113,29 @@ let ``bucket breakout torque emerges within spec brackets`` () =
             guard <- guard + 1
 
         for _ in 1..300 do
+            let stickRef = world.Physics.Simulation.Bodies.[machine.Stick]
             let mutable bucketRef = world.Physics.Simulation.Bodies.[machine.Bucket]
 
             if not bucketRef.Awake then
                 bucketRef.Awake <- true
 
-            // Resist curl (curl is −Z): apply +Z torque.
-            bucketRef.ApplyAngularImpulse(Vector3(0.0f, 0.0f, resistTorque * Tuning.FixedDt))
+            let axisWorld = Vector3.Transform(Vector3.UnitZ, stickRef.Pose.Orientation)
+
+            let relativeVelocity =
+                Vector3.Dot(bucketRef.Velocity.Angular - stickRef.Velocity.Angular, axisWorld)
+
+            let sign =
+                if relativeVelocity < -0.02f then 1.0f
+                elif relativeVelocity > 0.02f then -1.0f
+                else 0.0f
+
+            bucketRef.ApplyAngularImpulse(Vector3(0.0f, 0.0f, sign * brakeTorque * Tuning.FixedDt))
             world.Step(input 0.0f 0.0f -1.0f 0.0f 0.0f 0.0f) |> ignore
 
         machine.BucketAngle
 
-    Assert.True(curlAgainst 8500.0f < -1.3f, $"8.5 kN·m should be overcome, angle {curlAgainst 8500.0f}")
-    Assert.True(curlAgainst 13000.0f > -1.2f, $"13 kN·m should stall the curl, angle {curlAgainst 13000.0f}")
+    Assert.True(curlAgainst 8500.0f < -1.3f, $"8.5 kN·m brake should be ground through: {curlAgainst 8500.0f}")
+    Assert.True(curlAgainst 13000.0f > -1.2f, $"13 kN·m brake should stop the curl: {curlAgainst 13000.0f}")
 
 [<Fact>]
 let ``two functions on one circuit share flow; different circuits do not`` () =

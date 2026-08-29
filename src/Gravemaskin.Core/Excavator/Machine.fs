@@ -39,14 +39,15 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
     let stick =
         Bepu.addDynamicBox simulation stickCenter (Vector3(1.1f, 0.14f, 0.12f) * scale) massStick
 
-    // ponytail: single-box bucket (the open-plate compound is deferred —
-    // the load-scalar payload made it unnecessary for bucket-fill). Note the
-    // computed cutting edge extends ~0.15 m beyond this box: the edge point
-    // carves/measures, the box collides.
+    // Open-plate compound bucket: bottom + back + two sides, opening toward
+    // +X/+Y in bucket-local space — clumps physically rest in a curled
+    // bucket and pour out of a dumped one. The computed cutting edge still
+    // extends ~0.15 m beyond the plates: the edge point carves/measures,
+    // the plates collide.
     let bucketSize = Vector3(0.5f, 0.4f, 0.6f) * scale
 
     let bucket =
-        Bepu.addDynamicBox simulation bucketCenter bucketSize massBucket
+        Bepu.addDynamicOpenBucket simulation physics.Pool bucketCenter bucketSize massBucket
 
     // Machine parts don't self-collide (collision group; RagdollDemo pattern).
     do
