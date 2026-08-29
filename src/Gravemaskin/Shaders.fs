@@ -29,6 +29,52 @@ void main()
 }
 """
 
+    /// Shared PS3-era shading core: gamma-correct (albedo linearized, lit in
+    /// linear, gamma-encoded out), 3×3 PCF sun shadow from the depth map,
+    /// hemispheric ambient, optional paint specular, distance fog.
+    let private shadingCommon =
+        """
+uniform vec3 sunDirection;
+uniform vec3 cameraPosition;
+uniform sampler2DShadow shadowMap;
+uniform mat4 lightViewProjection;
+
+float shadowFactor(vec3 world, vec3 n)
+{
+    // Normal-offset + depth bias against acne; outside the map = lit.
+    vec4 p = lightViewProjection * vec4(world + n * 0.05, 1.0);
+    vec3 q = p.xyz / p.w * 0.5 + 0.5;
+    if (q.x < 0.002 || q.x > 0.998 || q.y < 0.002 || q.y > 0.998 || q.z > 0.999)
+        return 1.0;
+    float sum = 0.0;
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++)
+            sum += texture(shadowMap, vec3(q.xy + vec2(float(dx), float(dy)) / 2048.0, q.z - 0.0016));
+    return sum / 9.0;
+}
+
+vec3 shade(vec3 albedoGamma, vec3 rawNormal, vec3 world, float specStrength)
+{
+    vec3 albedo = pow(max(albedoGamma, vec3(0.0)), vec3(2.2));
+    vec3 n = normalize(rawNormal);
+    float sun = max(dot(n, sunDirection), 0.0);
+    float shadow = shadowFactor(world, n);
+    // Hemispheric ambient (linear): sky from above, ground bounce below.
+    vec3 ambient = mix(vec3(0.050, 0.042, 0.036), vec3(0.115, 0.125, 0.150), n.y * 0.5 + 0.5);
+    vec3 lit = albedo * (ambient + vec3(1.15, 1.06, 0.90) * sun * shadow);
+    if (specStrength > 0.0)
+    {
+        vec3 viewDirection = normalize(cameraPosition - world);
+        float spec = pow(max(dot(reflect(-sunDirection, n), viewDirection), 0.0), 28.0);
+        lit += vec3(spec) * specStrength * shadow;
+    }
+    float dist = length(world - cameraPosition);
+    float fog = 1.0 - exp(-dist * 0.007);
+    lit = mix(lit, vec3(0.34, 0.37, 0.43), fog);
+    return pow(lit, vec3(1.0 / 2.2));
+}
+"""
+
     let terrainFragment =
         """#version 410 core
 in vec3 vNormal;
@@ -36,32 +82,20 @@ in vec3 vColor;
 in vec3 vWorld;
 in float vLayer;
 
-uniform vec3 sunDirection;
-uniform vec3 cameraPosition;
 uniform sampler2DArray detailTextures;
 
 out vec4 fragColor;
-
+"""
+        + shadingCommon
+        + """
 void main()
 {
-    vec3 n = normalize(vNormal);
-    float sun = max(dot(n, sunDirection), 0.0);
-    // Hemispheric ambient: sky-blue-grey from above, ground bounce below.
-    vec3 ambient = mix(vec3(0.18, 0.16, 0.14), vec3(0.35, 0.37, 0.40), n.y * 0.5 + 0.5);
-
     // Two scales of the per-material detail texture (tileable, generated at
     // startup): close detail + a broader octave to break the repeat.
     vec3 detailNear = texture(detailTextures, vec3(vWorld.xz * 0.9, vLayer)).rgb;
     vec3 detailFar = texture(detailTextures, vec3(vWorld.xz * 0.13, vLayer)).rgb;
     vec3 detail = detailNear * detailFar * 4.0;
-
-    vec3 lit = vColor * detail * (ambient + vec3(1.0, 0.96, 0.88) * sun * 0.9);
-
-    // Distance fog toward an overcast horizon.
-    float dist = length(vWorld - cameraPosition);
-    float fog = 1.0 - exp(-dist * 0.012);
-    vec3 sky = vec3(0.63, 0.66, 0.70);
-    fragColor = vec4(mix(lit, sky, fog), 1.0);
+    fragColor = vec4(shade(vColor * detail, vNormal, vWorld, 0.0), 1.0);
 }
 """
 
@@ -139,53 +173,82 @@ in vec3 vNormal;
 in vec3 vColor;
 in vec3 vWorld;
 
-uniform vec3 sunDirection;
-uniform vec3 cameraPosition;
-
 out vec4 fragColor;
-
+"""
+        + shadingCommon
+        + """
 void main()
 {
-    vec3 n = normalize(vNormal);
-    float sun = max(dot(n, sunDirection), 0.0);
-    vec3 ambient = mix(vec3(0.16, 0.14, 0.12), vec3(0.33, 0.35, 0.38), n.y * 0.5 + 0.5);
-    vec3 viewDirection = normalize(cameraPosition - vWorld);
-    float spec = pow(max(dot(reflect(-sunDirection, n), viewDirection), 0.0), 28.0) * 0.4;
-    vec3 lit = vColor * (ambient + vec3(1.0, 0.96, 0.88) * sun * 0.9) + vec3(spec);
-    float dist = length(vWorld - cameraPosition);
-    float fog = 1.0 - exp(-dist * 0.012);
-    fragColor = vec4(mix(lit, vec3(0.63, 0.66, 0.70), fog), 1.0);
+    fragColor = vec4(shade(vColor, vNormal, vWorld, 0.5), 1.0);
 }
 """
 
-    /// Ground-hugging blob shadow: a disc that fades radially.
-    let blobVertex =
+    /// Depth-only pass for the sun shadow map.
+    let depthVertex =
         """#version 410 core
 layout(location = 0) in vec3 position;
-layout(location = 1) in vec3 normal;
 
-uniform mat4 viewProjection;
-uniform mat4 model;
-
-out vec2 vDisc;
+uniform mat4 mvp;
 
 void main()
 {
-    vDisc = position.xz * 2.0;
-    gl_Position = viewProjection * (model * vec4(position, 1.0));
+    gl_Position = mvp * vec4(position, 1.0);
 }
 """
 
-    let blobFragment =
+    let depthFragment =
         """#version 410 core
-in vec2 vDisc;
+void main() {}
+"""
+
+    /// Water: a translucent animated sheet with fresnel toward the horizon
+    /// and a sun glint.
+    let waterVertex =
+        """#version 410 core
+layout(location = 0) in vec3 position;
+
+uniform mat4 viewProjection;
+uniform float time;
+uniform float waterLevel;
+
+out vec3 vWorld;
+
+void main()
+{
+    vec3 p = position;
+    // Two crossing ripple trains, small enough to keep shorelines honest.
+    p.y = waterLevel + sin(p.x * 1.7 + time * 1.3) * 0.02 + sin(p.z * 2.3 - time * 0.9) * 0.015;
+    vWorld = p;
+    gl_Position = viewProjection * vec4(p, 1.0);
+}
+"""
+
+    let waterFragment =
+        """#version 410 core
+in vec3 vWorld;
+
+uniform vec3 sunDirection;
+uniform vec3 cameraPosition;
+uniform float time;
 
 out vec4 fragColor;
 
 void main()
 {
-    float alpha = (1.0 - smoothstep(0.35, 1.0, length(vDisc))) * 0.42;
-    fragColor = vec4(0.02, 0.02, 0.03, alpha);
+    // Ripple normal from the same waves the vertex shader displaces with.
+    float dx = cos(vWorld.x * 1.7 + time * 1.3) * 0.034;
+    float dz = cos(vWorld.z * 2.3 - time * 0.9) * 0.034;
+    vec3 n = normalize(vec3(-dx, 1.0, -dz));
+    vec3 viewDirection = normalize(cameraPosition - vWorld);
+    float fresnel = pow(1.0 - max(dot(n, viewDirection), 0.0), 3.0);
+    vec3 deep = vec3(0.05, 0.10, 0.12);
+    vec3 sky = vec3(0.45, 0.52, 0.60);
+    float glint = pow(max(dot(reflect(-sunDirection, n), viewDirection), 0.0), 90.0);
+    vec3 color = mix(deep, sky, fresnel * 0.8) + vec3(glint) * 0.7;
+    float dist = length(vWorld - cameraPosition);
+    float fog = 1.0 - exp(-dist * 0.007);
+    color = mix(color, vec3(0.63, 0.66, 0.70), fog);
+    fragColor = vec4(color, 0.62 + fresnel * 0.3);
 }
 """
 
@@ -220,19 +283,12 @@ in vec3 vNormal;
 in vec3 vColor;
 in vec3 vWorld;
 
-uniform vec3 sunDirection;
-uniform vec3 cameraPosition;
-
 out vec4 fragColor;
-
+"""
+        + shadingCommon
+        + """
 void main()
 {
-    vec3 n = normalize(vNormal);
-    float sun = max(dot(n, sunDirection), 0.0);
-    vec3 ambient = mix(vec3(0.16, 0.14, 0.12), vec3(0.33, 0.35, 0.38), n.y * 0.5 + 0.5);
-    vec3 lit = vColor * (ambient + vec3(1.0, 0.96, 0.88) * sun * 0.9);
-    float dist = length(vWorld - cameraPosition);
-    float fog = 1.0 - exp(-dist * 0.012);
-    fragColor = vec4(mix(lit, vec3(0.63, 0.66, 0.70), fog), 1.0);
+    fragColor = vec4(shade(vColor, vNormal, vWorld, 0.0), 1.0);
 }
 """

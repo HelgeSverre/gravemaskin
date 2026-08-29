@@ -130,8 +130,59 @@ type Renderer(gl: GL, state: SoilState) =
         handle
     let clodProgram = GlUtil.program gl Shaders.clodVertex Shaders.clodFragment
     let solidProgram = GlUtil.program gl Shaders.solidVertex Shaders.solidFragment
-    let blobProgram = GlUtil.program gl Shaders.blobVertex Shaders.blobFragment
+    let depthProgram = GlUtil.program gl Shaders.depthVertex Shaders.depthFragment
+    let waterProgram = GlUtil.program gl Shaders.waterVertex Shaders.waterFragment
     let grainProgram = GlUtil.program gl Shaders.grainVertex Shaders.clodFragment
+
+    // Sun shadow map: one 2048² depth target, orthographic light frustum
+    // re-centered on the machine every frame. Hardware PCF via the
+    // comparison sampler.
+    [<Literal>]
+    let ShadowSize = 2048
+
+    let shadowTexture =
+        let handle = gl.GenTexture()
+        gl.BindTexture(TextureTarget.Texture2D, handle)
+
+        gl.TexImage2D(
+            TextureTarget.Texture2D,
+            0,
+            int InternalFormat.DepthComponent24,
+            uint32 ShadowSize,
+            uint32 ShadowSize,
+            0,
+            PixelFormat.DepthComponent,
+            PixelType.Float,
+            IntPtr.Zero.ToPointer()
+        )
+
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, int TextureMinFilter.Linear)
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, int TextureMagFilter.Linear)
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, int TextureWrapMode.ClampToEdge)
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, int TextureWrapMode.ClampToEdge)
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, int GLEnum.CompareRefToTexture)
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareFunc, int GLEnum.Lequal)
+        handle
+
+    let shadowFbo =
+        let handle = gl.GenFramebuffer()
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, handle)
+
+        gl.FramebufferTexture2D(
+            FramebufferTarget.Framebuffer,
+            FramebufferAttachment.DepthAttachment,
+            TextureTarget.Texture2D,
+            shadowTexture,
+            0
+        )
+
+        gl.DrawBuffer DrawBufferMode.None
+        gl.ReadBuffer ReadBufferMode.None
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0u)
+        handle
+
+    let viewportScratch = Array.zeroCreate<int> 4
+    let waterClock = Diagnostics.Stopwatch.StartNew()
 
     let skyProgram =
         GlUtil.program
@@ -235,26 +286,37 @@ void main()
     let cylinderVbo = gl.GenBuffer()
     let cylinderIbo = gl.GenBuffer()
 
-    // Unit disc in the XZ plane (for blob shadows).
-    let discVerts, discIndices =
-        let segments = 16
-        let data = ResizeArray<float32>()
-        data.AddRange [| 0.0f; 0.0f; 0.0f; 0.0f; 1.0f; 0.0f |]
+    // Water sheet: a tessellated grid over the whole map (the vertex shader
+    // lifts it to the water table and ripples it). Terrain above the table
+    // simply z-buffers it away, so ponds appear exactly in the dips.
+    let waterVerts, waterIndices =
+        let grid = 48
+        let width = float32 state.Config.CellsX * state.Config.CellSize
+        let depth = float32 state.Config.CellsZ * state.Config.CellSize
+        let data = Array.zeroCreate<float32> ((grid + 1) * (grid + 1) * 3)
 
-        for i in 0 .. segments - 1 do
-            let angle = float32 i / float32 segments * MathF.PI * 2.0f
-            data.AddRange [| MathF.Cos angle * 0.5f; 0.0f; MathF.Sin angle * 0.5f; 0.0f; 1.0f; 0.0f |]
+        for z in 0 .. grid do
+            for x in 0 .. grid do
+                let i = (z * (grid + 1) + x) * 3
+                data.[i] <- float32 x / float32 grid * width
+                data.[i + 1] <- 0.0f
+                data.[i + 2] <- float32 z / float32 grid * depth
 
         let indices = ResizeArray<uint32>()
 
-        for i in 0 .. segments - 1 do
-            indices.AddRange [| 0u; uint32 (1 + (i + 1) % segments); uint32 (1 + i) |]
+        for z in 0 .. grid - 1 do
+            for x in 0 .. grid - 1 do
+                let v0 = uint32 (z * (grid + 1) + x)
+                let v1 = v0 + 1u
+                let v2 = v0 + uint32 (grid + 1)
+                let v3 = v2 + 1u
+                indices.AddRange [| v0; v2; v1; v1; v2; v3 |]
 
-        data.ToArray(), indices.ToArray()
+        data, indices.ToArray()
 
-    let discVao = gl.GenVertexArray()
-    let discVbo = gl.GenBuffer()
-    let discIbo = gl.GenBuffer()
+    let waterVao = gl.GenVertexArray()
+    let waterVbo = gl.GenBuffer()
+    let waterIbo = gl.GenBuffer()
 
     /// Visual boxes per machine body part:
     /// (body index, local offset, size, color, local Z rotation).
@@ -721,19 +783,25 @@ void main()
         gl.EnableVertexAttribArray 1u
         gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
 
-        // Cylinder + disc meshes.
-        for (vao, vbo, ibo, verts, indices) in
-            [| cylinderVao, cylinderVbo, cylinderIbo, cylinderVerts, cylinderIndices
-               discVao, discVbo, discIbo, discVerts, discIndices |] do
-            gl.BindVertexArray vao
-            gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo)
-            GlUtil.upload gl BufferTargetARB.ArrayBuffer verts verts.Length BufferUsageARB.StaticDraw
-            gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ibo)
-            GlUtil.upload gl BufferTargetARB.ElementArrayBuffer indices indices.Length BufferUsageARB.StaticDraw
-            gl.EnableVertexAttribArray 0u
-            gl.VertexAttribPointer(0u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr.Zero.ToPointer())
-            gl.EnableVertexAttribArray 1u
-            gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
+        // Cylinder mesh.
+        gl.BindVertexArray cylinderVao
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, cylinderVbo)
+        GlUtil.upload gl BufferTargetARB.ArrayBuffer cylinderVerts cylinderVerts.Length BufferUsageARB.StaticDraw
+        gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, cylinderIbo)
+        GlUtil.upload gl BufferTargetARB.ElementArrayBuffer cylinderIndices cylinderIndices.Length BufferUsageARB.StaticDraw
+        gl.EnableVertexAttribArray 0u
+        gl.VertexAttribPointer(0u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr.Zero.ToPointer())
+        gl.EnableVertexAttribArray 1u
+        gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
+
+        // Water sheet mesh (position only).
+        gl.BindVertexArray waterVao
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, waterVbo)
+        GlUtil.upload gl BufferTargetARB.ArrayBuffer waterVerts waterVerts.Length BufferUsageARB.StaticDraw
+        gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, waterIbo)
+        GlUtil.upload gl BufferTargetARB.ElementArrayBuffer waterIndices waterIndices.Length BufferUsageARB.StaticDraw
+        gl.EnableVertexAttribArray 0u
+        gl.VertexAttribPointer(0u, 3, VertexAttribPointerType.Float, false, 12u, IntPtr.Zero.ToPointer())
 
         // Grain mesh + instance buffer.
         gl.BindVertexArray grainVao
@@ -817,6 +885,84 @@ void main()
             m.M43 <- mid.Z
             m
 
+    /// Every mesh instance of the machine at the interpolated pose:
+    /// boxes, cylindrical details, and hydraulic barrel+rod runs.
+    /// `emit useCylinderMesh model color` — shared by the shadow depth pass
+    /// and the lit main pass.
+    let emitMachineMeshes
+        (previous: RenderSnapshot)
+        (current: RenderSnapshot)
+        (alpha: float32)
+        (emit: bool -> Matrix4x4 -> Vector3 -> unit)
+        =
+        if current.MachinePartCount > 0 then
+            let scaleFactor = current.MachineScale
+
+            let partPose (part: int) =
+                let hasPrevious = part < previous.MachinePartCount
+
+                let position =
+                    if hasPrevious then
+                        Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
+                    else
+                        current.MachinePositions.[part]
+
+                let orientation =
+                    if hasPrevious then
+                        Quaternion.Slerp(previous.MachineOrientations.[part], current.MachineOrientations.[part], alpha)
+                    else
+                        current.MachineOrientations.[part]
+
+                position, orientation
+
+            for (part, offset, size, color, localRotation) in boxesFor current.MachineName do
+                if part < current.MachinePartCount then
+                    let position, orientation = partPose part
+
+                    let model =
+                        Matrix4x4.CreateScale(size * scaleFactor)
+                        * Matrix4x4.CreateTranslation(offset * scaleFactor)
+                        * Matrix4x4.CreateRotationZ localRotation
+                        * Matrix4x4.CreateFromQuaternion orientation
+                        * Matrix4x4.CreateTranslation position
+
+                    emit false model color
+
+            for (part, offset, length, diameter, color, axis) in cylindersFor current.MachineName do
+                if part < current.MachinePartCount then
+                    let position, orientation = partPose part
+
+                    let axisRotation =
+                        match axis with
+                        | 1 -> Matrix4x4.CreateRotationZ(MathF.PI / 2.0f)
+                        | 2 -> Matrix4x4.CreateRotationY(MathF.PI / 2.0f)
+                        | _ -> Matrix4x4.Identity
+
+                    let model =
+                        Matrix4x4.CreateScale(length * scaleFactor, diameter * scaleFactor, diameter * scaleFactor)
+                        * axisRotation
+                        * Matrix4x4.CreateTranslation(offset * scaleFactor)
+                        * Matrix4x4.CreateFromQuaternion orientation
+                        * Matrix4x4.CreateTranslation position
+
+                    emit true model color
+
+            for (parentPart, parentAnchor, childPart, childAnchor) in cylinderRuns do
+                if childPart < current.MachinePartCount then
+                    let parentPosition, parentOrientation = partPose parentPart
+                    let childPosition, childOrientation = partPose childPart
+
+                    let a =
+                        parentPosition + Vector3.Transform(parentAnchor * scaleFactor, parentOrientation)
+
+                    let b =
+                        childPosition + Vector3.Transform(childAnchor * scaleFactor, childOrientation)
+
+                    // Barrel covers the parent 55%; the rod runs the rest.
+                    let barrelEnd = Vector3.Lerp(a, b, 0.55f)
+                    emit true (beamMatrix a barrelEnd (0.09f * scaleFactor)) (Vector3(0.16f, 0.16f, 0.18f))
+                    emit true (beamMatrix barrelEnd b (0.045f * scaleFactor)) (Vector3(0.75f, 0.76f, 0.78f))
+
     /// Rebuild up to `budget` dirty tiles (render meshes only).
     member _.RebuildDirtyTiles(budget: int) =
         let mutable rebuilt = 0
@@ -842,9 +988,65 @@ void main()
             brush: Vector3 voption,
             brushRadius: float32
         ) =
-        gl.Clear(uint32 (ClearBufferMask.ColorBufferBit ||| ClearBufferMask.DepthBufferBit))
-
         let sun = Vector3.Normalize(Vector3(0.4f, 0.8f, 0.3f))
+
+        // ---- sun shadow pass: ortho frustum centered on the machine ----
+        let lightCenter =
+            if current.MachinePartCount > 0 then
+                current.MachinePositions.[0]
+            else
+                cameraPosition
+
+        let lightViewProjection =
+            Matrix4x4.CreateLookAt(lightCenter + sun * 60.0f, lightCenter, Vector3.UnitY)
+            * Matrix4x4.CreateOrthographic(56.0f, 56.0f, 1.0f, 130.0f)
+
+        gl.GetInteger(GetPName.Viewport, Span<int>(viewportScratch))
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, shadowFbo)
+        gl.Viewport(0, 0, uint32 ShadowSize, uint32 ShadowSize)
+        gl.Clear(uint32 ClearBufferMask.DepthBufferBit)
+        gl.Enable EnableCap.PolygonOffsetFill
+        gl.PolygonOffset(2.0f, 4.0f)
+        gl.UseProgram depthProgram
+        let depthMvpLocation = gl.GetUniformLocation(depthProgram, "mvp")
+        let mutable lightVp = lightViewProjection
+        gl.UniformMatrix4(depthMvpLocation, 1u, false, &lightVp.M11)
+
+        for tile in 0 .. tileCount - 1 do
+            gl.BindVertexArray tileVaos.[tile]
+            gl.DrawElements(PrimitiveType.Triangles, uint32 tileIndexCount, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer())
+
+        emitMachineMeshes previous current alpha (fun useCylinderMesh model _ ->
+            gl.BindVertexArray (if useCylinderMesh then cylinderVao else cubeVao)
+            let mutable mvp = model * lightViewProjection
+            gl.UniformMatrix4(depthMvpLocation, 1u, false, &mvp.M11)
+
+            gl.DrawElements(
+                PrimitiveType.Triangles,
+                uint32 (if useCylinderMesh then cylinderIndices.Length else cubeIndices.Length),
+                DrawElementsType.UnsignedInt,
+                IntPtr.Zero.ToPointer()
+            ))
+
+        gl.Disable EnableCap.PolygonOffsetFill
+        gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0u)
+        gl.Viewport(viewportScratch.[0], viewportScratch.[1], uint32 viewportScratch.[2], uint32 viewportScratch.[3])
+
+        // ---- main pass ----
+        gl.Clear(uint32 (ClearBufferMask.ColorBufferBit ||| ClearBufferMask.DepthBufferBit))
+        gl.ActiveTexture TextureUnit.Texture1
+        gl.BindTexture(TextureTarget.Texture2D, shadowTexture)
+        gl.ActiveTexture TextureUnit.Texture0
+
+        // Shadow + light uniforms shared by every lit program.
+        let bindShadedProgram (program: uint32) =
+            gl.UseProgram program
+            let mutable vp = viewProjection
+            gl.UniformMatrix4(gl.GetUniformLocation(program, "viewProjection"), 1u, false, &vp.M11)
+            gl.UniformMatrix4(gl.GetUniformLocation(program, "lightViewProjection"), 1u, false, &lightVp.M11)
+            GlUtil.uniform3f gl program "sunDirection" sun
+            GlUtil.uniform3f gl program "cameraPosition" cameraPosition
+            GlUtil.uniform1i gl program "shadowMap" 1
 
         // Sky: fullscreen gradient at max depth, no writes.
         gl.DepthMask false
@@ -854,184 +1056,31 @@ void main()
         gl.DrawArrays(PrimitiveType.Triangles, 0, 3u)
         gl.DepthMask true
 
-        gl.UseProgram terrainProgram
-        let mutable vp = viewProjection
-        gl.UniformMatrix4(gl.GetUniformLocation(terrainProgram, "viewProjection"), 1u, false, &vp.M11)
-        GlUtil.uniform3f gl terrainProgram "sunDirection" sun
-        GlUtil.uniform3f gl terrainProgram "cameraPosition" cameraPosition
+        bindShadedProgram terrainProgram
         GlUtil.uniform1i gl terrainProgram "detailTextures" 0
-        gl.ActiveTexture TextureUnit.Texture0
         gl.BindTexture(TextureTarget.Texture2DArray, detailTextureArray)
 
         for tile in 0 .. tileCount - 1 do
             gl.BindVertexArray tileVaos.[tile]
             gl.DrawElements(PrimitiveType.Triangles, uint32 tileIndexCount, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer())
 
-        // Blob shadow: grounds the machine (PS2-era trick, still works).
+        // Machine: one lit pass over every box/cylinder/beam instance.
         if current.MachinePartCount > 0 then
-            let chassisPosition = current.MachinePositions.[0]
-            let shadowY = 0.04f + Soil.surfaceHeight state chassisPosition.X chassisPosition.Z
+            bindShadedProgram solidProgram
+            let modelLocation = gl.GetUniformLocation(solidProgram, "model")
 
-            let mutable shadowModel =
-                Matrix4x4.CreateScale(4.4f * current.MachineScale, 1.0f, 3.6f * current.MachineScale)
-                * Matrix4x4.CreateTranslation(chassisPosition.X, shadowY, chassisPosition.Z)
-
-            gl.Enable EnableCap.Blend
-            gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha)
-            gl.DepthMask false
-            gl.UseProgram blobProgram
-            gl.UniformMatrix4(gl.GetUniformLocation(blobProgram, "viewProjection"), 1u, false, &vp.M11)
-            gl.UniformMatrix4(gl.GetUniformLocation(blobProgram, "model"), 1u, false, &shadowModel.M11)
-            gl.BindVertexArray discVao
-            gl.DrawElements(PrimitiveType.Triangles, uint32 discIndices.Length, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer())
-            gl.DepthMask true
-            gl.Disable EnableCap.Blend
-
-        // Machine parts: interpolate each body pose, then draw its visual
-        // boxes with the solid shader.
-        if current.MachinePartCount > 0 then
-            gl.UseProgram solidProgram
-            gl.UniformMatrix4(gl.GetUniformLocation(solidProgram, "viewProjection"), 1u, false, &vp.M11)
-            GlUtil.uniform3f gl solidProgram "sunDirection" sun
-            GlUtil.uniform3f gl solidProgram "cameraPosition" cameraPosition
-            gl.BindVertexArray cubeVao
-
-            for (part, offset, size, color, localRotation) in boxesFor current.MachineName do
-                if part < current.MachinePartCount then
-                    let offset = offset * current.MachineScale
-                    let size = size * current.MachineScale
-                    let hasPrevious = part < previous.MachinePartCount
-
-                    let position =
-                        if hasPrevious then
-                            Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
-                        else
-                            current.MachinePositions.[part]
-
-                    let orientation =
-                        if hasPrevious then
-                            Quaternion.Slerp(
-                                previous.MachineOrientations.[part],
-                                current.MachineOrientations.[part],
-                                alpha
-                            )
-                        else
-                            current.MachineOrientations.[part]
-
-                    let mutable model =
-                        Matrix4x4.CreateScale size
-                        * Matrix4x4.CreateTranslation offset
-                        * Matrix4x4.CreateRotationZ localRotation
-                        * Matrix4x4.CreateFromQuaternion orientation
-                        * Matrix4x4.CreateTranslation position
-
-                    gl.UniformMatrix4(gl.GetUniformLocation(solidProgram, "model"), 1u, false, &model.M11)
-                    GlUtil.uniform3f gl solidProgram "solidColor" color
-
-                    gl.DrawElements(
-                        PrimitiveType.Triangles,
-                        uint32 cubeIndices.Length,
-                        DrawElementsType.UnsignedInt,
-                        IntPtr.Zero.ToPointer()
-                    )
-
-        // Cylindrical detail parts (wheels, pins, exhaust).
-        if current.MachinePartCount > 0 then
-            gl.UseProgram solidProgram
-            gl.BindVertexArray cylinderVao
-
-            for (part, offset, length, diameter, color, axis) in cylindersFor current.MachineName do
-                if part < current.MachinePartCount then
-                    let hasPrevious = part < previous.MachinePartCount
-
-                    let position =
-                        if hasPrevious then
-                            Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
-                        else
-                            current.MachinePositions.[part]
-
-                    let orientation =
-                        if hasPrevious then
-                            Quaternion.Slerp(previous.MachineOrientations.[part], current.MachineOrientations.[part], alpha)
-                        else
-                            current.MachineOrientations.[part]
-
-                    let axisRotation =
-                        match axis with
-                        | 1 -> Matrix4x4.CreateRotationZ(MathF.PI / 2.0f)
-                        | 2 -> Matrix4x4.CreateRotationY(MathF.PI / 2.0f)
-                        | _ -> Matrix4x4.Identity
-
-                    let scaleFactor = current.MachineScale
-
-                    let mutable model =
-                        Matrix4x4.CreateScale(length * scaleFactor, diameter * scaleFactor, diameter * scaleFactor)
-                        * axisRotation
-                        * Matrix4x4.CreateTranslation(offset * scaleFactor)
-                        * Matrix4x4.CreateFromQuaternion orientation
-                        * Matrix4x4.CreateTranslation position
-
-                    gl.UniformMatrix4(gl.GetUniformLocation(solidProgram, "model"), 1u, false, &model.M11)
-                    GlUtil.uniform3f gl solidProgram "solidColor" color
-
-                    gl.DrawElements(
-                        PrimitiveType.Triangles,
-                        uint32 cylinderIndices.Length,
-                        DrawElementsType.UnsignedInt,
-                        IntPtr.Zero.ToPointer()
-                    )
-
-        // Hydraulic cylinders: barrel (thick, parent side) + rod (thin) —
-        // drawn with the round mesh now.
-        if current.MachinePartCount > 0 then
-            gl.UseProgram solidProgram
-            gl.BindVertexArray cylinderVao
-
-            let partPose (part: int) =
-                let hasPrevious = part < previous.MachinePartCount
-
-                let position =
-                    if hasPrevious then
-                        Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
-                    else
-                        current.MachinePositions.[part]
-
-                let orientation =
-                    if hasPrevious then
-                        Quaternion.Slerp(previous.MachineOrientations.[part], current.MachineOrientations.[part], alpha)
-                    else
-                        current.MachineOrientations.[part]
-
-                position, orientation
-
-            let drawBeam (a: Vector3) (b: Vector3) (thickness: float32) (color: Vector3) =
-                let mutable model = beamMatrix a b thickness
-                gl.UniformMatrix4(gl.GetUniformLocation(solidProgram, "model"), 1u, false, &model.M11)
+            emitMachineMeshes previous current alpha (fun useCylinderMesh model color ->
+                gl.BindVertexArray (if useCylinderMesh then cylinderVao else cubeVao)
+                let mutable m = model
+                gl.UniformMatrix4(modelLocation, 1u, false, &m.M11)
                 GlUtil.uniform3f gl solidProgram "solidColor" color
 
                 gl.DrawElements(
                     PrimitiveType.Triangles,
-                    uint32 cylinderIndices.Length,
+                    uint32 (if useCylinderMesh then cylinderIndices.Length else cubeIndices.Length),
                     DrawElementsType.UnsignedInt,
                     IntPtr.Zero.ToPointer()
-                )
-
-            for (parentPart, parentAnchor, childPart, childAnchor) in cylinderRuns do
-                if childPart < current.MachinePartCount then
-                    let parentPosition, parentOrientation = partPose parentPart
-                    let childPosition, childOrientation = partPose childPart
-                    let scaleFactor = current.MachineScale
-
-                    let a =
-                        parentPosition + Vector3.Transform(parentAnchor * scaleFactor, parentOrientation)
-
-                    let b =
-                        childPosition + Vector3.Transform(childAnchor * scaleFactor, childOrientation)
-
-                    // Barrel covers the parent 55%; the rod runs the rest.
-                    let barrelEnd = Vector3.Lerp(a, b, 0.55f)
-                    drawBeam a barrelEnd (0.09f * scaleFactor) (Vector3(0.16f, 0.16f, 0.18f))
-                    drawBeam barrelEnd b (0.045f * scaleFactor) (Vector3(0.75f, 0.76f, 0.78f))
+                ))
 
         // Clumps are no longer drawn as balls: each renders as a cluster of
         // grains (below). Their interpolated positions seed the clusters.
@@ -1064,10 +1113,7 @@ void main()
         | ValueNone -> ()
 
         if instances > 0 then
-            gl.UseProgram clodProgram
-            gl.UniformMatrix4(gl.GetUniformLocation(clodProgram, "viewProjection"), 1u, false, &vp.M11)
-            GlUtil.uniform3f gl clodProgram "sunDirection" sun
-            GlUtil.uniform3f gl clodProgram "cameraPosition" cameraPosition
+            bindShadedProgram clodProgram
             gl.BindVertexArray clodVao
             gl.BindBuffer(BufferTargetARB.ArrayBuffer, clodInstanceVbo)
 
@@ -1216,10 +1262,7 @@ void main()
                     (baseColor * tint)
 
         if grainInstances > 0 then
-            gl.UseProgram grainProgram
-            gl.UniformMatrix4(gl.GetUniformLocation(grainProgram, "viewProjection"), 1u, false, &vp.M11)
-            GlUtil.uniform3f gl grainProgram "sunDirection" sun
-            GlUtil.uniform3f gl grainProgram "cameraPosition" cameraPosition
+            bindShadedProgram grainProgram
             gl.BindVertexArray grainVao
             gl.BindBuffer(BufferTargetARB.ArrayBuffer, grainInstanceVbo)
 
@@ -1238,11 +1281,40 @@ void main()
                 uint32 grainInstances
             )
 
+        // ---- water: translucent sheet at the water table ----
+        // Wherever the ground was dug (or lies) below the table, the sheet
+        // shows through — trenches flood visibly, exactly where the moisture
+        // sim already floods them.
+        if state.WaterTableHeight > 0.05f then
+            gl.Enable EnableCap.Blend
+            gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha)
+            gl.DepthMask false
+            gl.Disable EnableCap.CullFace
+            gl.UseProgram waterProgram
+            let mutable vp = viewProjection
+            gl.UniformMatrix4(gl.GetUniformLocation(waterProgram, "viewProjection"), 1u, false, &vp.M11)
+            GlUtil.uniform3f gl waterProgram "sunDirection" sun
+            GlUtil.uniform3f gl waterProgram "cameraPosition" cameraPosition
+            gl.Uniform1(gl.GetUniformLocation(waterProgram, "time"), float32 waterClock.Elapsed.TotalSeconds)
+            gl.Uniform1(gl.GetUniformLocation(waterProgram, "waterLevel"), state.WaterTableHeight)
+            gl.BindVertexArray waterVao
+
+            gl.DrawElements(
+                PrimitiveType.Triangles,
+                uint32 waterIndices.Length,
+                DrawElementsType.UnsignedInt,
+                IntPtr.Zero.ToPointer()
+            )
+
+            gl.Enable EnableCap.CullFace
+            gl.DepthMask true
+            gl.Disable EnableCap.Blend
+
     /// Deletes every GL object this renderer owns — the F9 world reload
     /// creates a fresh renderer against the new soil state.
     interface IDisposable with
         member _.Dispose() =
-            for program in [| terrainProgram; clodProgram; solidProgram; grainProgram; skyProgram |] do
+            for program in [| terrainProgram; clodProgram; solidProgram; grainProgram; skyProgram; depthProgram; waterProgram |] do
                 gl.DeleteProgram program
 
             for tile in 0 .. tileCount - 1 do
@@ -1265,8 +1337,9 @@ void main()
             gl.DeleteVertexArray cylinderVao
             gl.DeleteBuffer cylinderVbo
             gl.DeleteBuffer cylinderIbo
-            gl.DeleteVertexArray discVao
-            gl.DeleteBuffer discVbo
-            gl.DeleteBuffer discIbo
-            gl.DeleteProgram blobProgram
+            gl.DeleteVertexArray waterVao
+            gl.DeleteBuffer waterVbo
+            gl.DeleteBuffer waterIbo
+            gl.DeleteTexture shadowTexture
+            gl.DeleteFramebuffer shadowFbo
             gl.DeleteVertexArray skyVao

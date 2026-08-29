@@ -619,9 +619,12 @@ let main args =
                 orange
             )
 
-            // Circuit saturation: a full bar = that pump is maxed out, which
-            // is exactly when everything on it slows down.
+            // Pump-circuit saturation, labeled by the dominant function on
+            // each circuit: a full bar = that pump is maxed out, which is
+            // exactly when everything on it slows down.
             let circuitOf = [| 0; 1; 0; 2; 0; 1 |]
+            let circuitLabel = [| "BOOM"; "STICK"; "SWING" |]
+            hud.Text(margin, margin + line * 2.5f, uiScale * 0.7f, Vector4(0.85f, 0.85f, 0.82f, 0.7f), "PUMP LOAD")
 
             for circuit in 0..2 do
                 let mutable saturation = 0.0f
@@ -630,29 +633,29 @@ let main args =
                     if circuitOf.[f] = circuit then
                         saturation <- MathF.Max(saturation, 1.0f - m.GrantedScale f)
 
-                let y = margin + line * (2.5f + float32 circuit)
-                hud.Text(margin, y, uiScale * 0.8f, white, $"P%d{circuit + 1}")
-                hud.Bar(margin + 18.0f * uiScale, y, 50.0f * uiScale, 4.0f * uiScale, saturation, orange)
+                let y = margin + line * (3.5f + float32 circuit)
+                hud.Text(margin, y, uiScale * 0.8f, white, circuitLabel.[circuit])
+                hud.Bar(margin + 34.0f * uiScale, y, 44.0f * uiScale, 4.0f * uiScale, saturation, orange)
 
             let tiltDegrees = m.ChassisTilt * 57.3f
 
             hud.Text(
                 margin,
-                margin + line * 6.0f,
+                margin + line * 7.0f,
                 uiScale * 0.8f,
                 (if tiltDegrees > 18.0f then red else white),
                 $"TILT %.0f{tiltDegrees}"
             )
 
             if m.StallActive && (world.Tick / 15L) % 2L = 0L then
-                hud.Text(margin, margin + line * 7.2f, uiScale, red, "STALL")
+                hud.Text(margin, margin + line * 8.2f, uiScale, red, "STALL")
         | None -> ()
 
         // Small stat line under the tilt readout.
         if showHud then
             hud.Text(
             10.0f * uiScale,
-            10.0f * uiScale + 11.0f * uiScale * 8.2f,
+            10.0f * uiScale + 11.0f * uiScale * 9.2f,
             uiScale * 0.6f,
             Vector4(0.9f, 0.9f, 0.88f, 0.55f),
                 (let pattern = (if settings.ControlPattern = ControlPattern.Iso then "ISO" else "SAE")
@@ -660,32 +663,53 @@ let main args =
             )
 
         if showHud then
-            // Control diagram: a translucent blocky excavator silhouette with
-            // the keys sitting on the parts they drive. No labels needed.
+            // Control diagram: a TB216-liveried side profile (dark tracks,
+            // red skirt, white house/boom, glass, steel bucket) built from
+            // rects — stepped rects fake the gooseneck diagonals. Keys sit
+            // on the parts they drive.
             let u = uiScale
-            let ox = float32 size.X - 150.0f * u
-            let oy = float32 size.Y - 96.0f * u
-            hud.Solid(ox, oy, 150.0f * u, 86.0f * u, Vector4(0.05f, 0.05f, 0.06f, 0.30f))
-            let shape = Vector4(0.85f, 0.85f, 0.82f, 0.5f)
-            let trackShape = Vector4(0.6f, 0.6f, 0.58f, 0.5f)
-            let key = Vector4(1.0f, 1.0f, 1.0f, 0.92f)
-            // Separated parts so the profile reads: tracks, cab, boom out,
-            // stick down, bucket — with keys floating beside what they drive.
-            hud.Solid(ox + 16.0f * u, oy + 54.0f * u, 44.0f * u, 9.0f * u, trackShape)
-            hud.Solid(ox + 20.0f * u, oy + 30.0f * u, 22.0f * u, 22.0f * u, shape)
-            hud.Solid(ox + 48.0f * u, oy + 24.0f * u, 34.0f * u, 5.0f * u, shape)
-            hud.Solid(ox + 84.0f * u, oy + 30.0f * u, 5.0f * u, 24.0f * u, shape)
-            hud.Solid(ox + 74.0f * u, oy + 56.0f * u, 14.0f * u, 7.0f * u, shape)
-            hud.Text(ox + 6.0f * u, oy + 36.0f * u, u * 0.9f, key, "A")
-            hud.Text(ox + 44.0f * u, oy + 36.0f * u, u * 0.9f, key, "D")
-            hud.Text(ox + 60.0f * u, oy + 10.0f * u, u * 0.9f, key, "I")
-            hud.Text(ox + 60.0f * u, oy + 33.0f * u, u * 0.9f, key, "K")
-            hud.Text(ox + 94.0f * u, oy + 28.0f * u, u * 0.9f, key, "W")
-            hud.Text(ox + 94.0f * u, oy + 46.0f * u, u * 0.9f, key, "S")
-            hud.Text(ox + 64.0f * u, oy + 68.0f * u, u * 0.9f, key, "J")
-            hud.Text(ox + 92.0f * u, oy + 68.0f * u, u * 0.9f, key, "L")
-            hud.Text(ox + 16.0f * u, oy + 68.0f * u, u * 0.75f, key, "QE")
-            hud.Text(ox + 40.0f * u, oy + 68.0f * u, u * 0.75f, key, "ZC")
+            let ox = float32 size.X - 156.0f * u
+            let oy = float32 size.Y - 100.0f * u
+            hud.Solid(ox, oy, 156.0f * u, 90.0f * u, Vector4(0.05f, 0.05f, 0.06f, 0.30f))
+            let track = Vector4(0.13f, 0.13f, 0.14f, 0.72f)
+            let wheel = Vector4(0.04f, 0.04f, 0.05f, 0.8f)
+            let redSkirt = Vector4(0.72f, 0.10f, 0.11f, 0.72f)
+            let body = Vector4(0.92f, 0.90f, 0.85f, 0.68f)
+            let glass = Vector4(0.10f, 0.13f, 0.18f, 0.75f)
+            let steel = Vector4(0.35f, 0.35f, 0.38f, 0.72f)
+            let key = Vector4(1.0f, 1.0f, 1.0f, 0.95f)
+            // undercarriage: track band, wheels, dozer blade
+            hud.Solid(ox + 14.0f * u, oy + 60.0f * u, 48.0f * u, 10.0f * u, track)
+            hud.Solid(ox + 17.0f * u, oy + 63.0f * u, 6.0f * u, 6.0f * u, wheel)
+            hud.Solid(ox + 53.0f * u, oy + 63.0f * u, 6.0f * u, 6.0f * u, wheel)
+            hud.Solid(ox + 60.0f * u, oy + 58.0f * u, 8.0f * u, 3.0f * u, steel)
+            hud.Solid(ox + 66.0f * u, oy + 54.0f * u, 4.0f * u, 14.0f * u, steel)
+            // house: red skirt band, white body, cab + glass
+            hud.Solid(ox + 16.0f * u, oy + 54.0f * u, 44.0f * u, 6.0f * u, redSkirt)
+            hud.Solid(ox + 18.0f * u, oy + 38.0f * u, 40.0f * u, 16.0f * u, body)
+            hud.Solid(ox + 20.0f * u, oy + 22.0f * u, 18.0f * u, 20.0f * u, body)
+            hud.Solid(ox + 31.0f * u, oy + 25.0f * u, 6.0f * u, 13.0f * u, glass)
+            // gooseneck boom: white steps up to the knee...
+            hud.Solid(ox + 58.0f * u, oy + 44.0f * u, 11.0f * u, 5.0f * u, body)
+            hud.Solid(ox + 66.0f * u, oy + 38.0f * u, 11.0f * u, 5.0f * u, body)
+            hud.Solid(ox + 74.0f * u, oy + 32.0f * u, 12.0f * u, 5.0f * u, body)
+            // ...then the stick steps down to the bucket
+            hud.Solid(ox + 86.0f * u, oy + 34.0f * u, 5.0f * u, 10.0f * u, body)
+            hud.Solid(ox + 89.0f * u, oy + 43.0f * u, 5.0f * u, 10.0f * u, body)
+            // bucket: steel with a tooth
+            hud.Solid(ox + 88.0f * u, oy + 53.0f * u, 11.0f * u, 8.0f * u, steel)
+            hud.Solid(ox + 95.0f * u, oy + 61.0f * u, 6.0f * u, 3.0f * u, wheel)
+            // keys on the parts they drive
+            hud.Text(ox + 6.0f * u, oy + 28.0f * u, u * 0.9f, key, "A")
+            hud.Text(ox + 44.0f * u, oy + 28.0f * u, u * 0.9f, key, "D")
+            hud.Text(ox + 66.0f * u, oy + 22.0f * u, u * 0.9f, key, "I")
+            hud.Text(ox + 60.0f * u, oy + 52.0f * u, u * 0.9f, key, "K")
+            hud.Text(ox + 100.0f * u, oy + 30.0f * u, u * 0.9f, key, "W")
+            hud.Text(ox + 100.0f * u, oy + 42.0f * u, u * 0.9f, key, "S")
+            hud.Text(ox + 78.0f * u, oy + 64.0f * u, u * 0.9f, key, "J")
+            hud.Text(ox + 104.0f * u, oy + 64.0f * u, u * 0.9f, key, "L")
+            hud.Text(ox + 14.0f * u, oy + 76.0f * u, u * 0.75f, key, "QE")
+            hud.Text(ox + 42.0f * u, oy + 76.0f * u, u * 0.75f, key, "ZC")
 
         if menuOpen then
             let cx = float32 size.X * 0.5f - 90.0f * uiScale
