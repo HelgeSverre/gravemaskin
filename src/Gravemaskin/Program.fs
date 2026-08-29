@@ -464,7 +464,7 @@ let main args =
                             0.35f,
                             Volume.materialOfByte dumpedMat,
                             moistByte,
-                            Math.Clamp(int (mass * 220.0f), 20, 550)
+                            Math.Clamp(int (mass * 330.0f), 30, 700)
                         )
                     | DigStarted ->
                         // Crumble off the cutting edge, drawn INTO the mouth

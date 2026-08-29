@@ -305,9 +305,9 @@ module Volume =
                 let height =
                     baseHeight + (Noise.fbm2 seed 4 point - 0.5f) * 2.0f * relief
 
-                let sandiness = Noise.fbm2 (seed + 7919) 3 (point * 0.6f)
-                let rockiness = Noise.fbm2 (seed + 4211) 3 (point * 0.8f)
-                let meadow = Noise.fbm2 (seed + 611) 3 (point * 0.35f)
+                let sandiness = Noise.fbm2 (seed + 7919) 2 (point * 0.32f)
+                let rockiness = Noise.fbm2 (seed + 4211) 2 (point * 0.42f)
+                let meadow = Noise.fbm2 (seed + 611) 2 (point * 0.22f)
                 let fullCells = max 1 (int (height / config.CellSize))
                 let nearWater = height < state.WaterTableHeight + 0.35f
 
@@ -316,11 +316,14 @@ module Volume =
                     let depthFromTop = float32 (fullCells - 1 - y) * config.CellSize
                     let isSurface = y = min (fullCells - 1) (config.CellsY - 1)
 
+                    // Thresholds set from the measured fbm2 percentiles
+                    // (2-octave noise is narrower than 4-octave): ~12%
+                    // sand, ~11% gravel, ~30% grass meadow.
                     let mat =
                         if depthFromTop > 0.6f then Clay
-                        elif rockiness > 0.66f then Gravel
-                        elif sandiness > 0.62f then (if nearWater then WetSand else DrySand)
-                        elif isSurface && meadow > 0.5f && not nearWater then Grass
+                        elif rockiness > 0.70f then Gravel
+                        elif sandiness > 0.44f then (if nearWater then WetSand else DrySand)
+                        elif isSurface && meadow > 0.51f && not nearWater then Grass
                         else Topsoil
 
                     state.Occupancy.[index] <- 255uy

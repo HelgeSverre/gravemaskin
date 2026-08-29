@@ -85,13 +85,15 @@ void main()
 }
 """
 
-    /// Grains: heavily hash-deformed and randomly flattened per instance —
-    /// angular specks and flakes, not beads.
+    /// Grains: heavily hash-deformed, randomly flattened, and STRETCHED
+    /// along their velocity — fast grains draw as streaks, so a pour reads
+    /// as a ribbon of sand instead of a scatter of beads.
     let grainVertex =
         """#version 410 core
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec4 instance;      // xyz = world pos, w = size
 layout(location = 2) in vec3 instanceColor;
+layout(location = 3) in vec3 instanceVelocity;
 
 uniform mat4 viewProjection;
 
@@ -106,12 +108,19 @@ float hash(vec2 p)
 
 void main()
 {
-    // Per-vertex-per-instance jaggedness: 0.45..1.55 radius wobble makes
-    // shards; per-instance squash turns some grains into flakes.
     float wobble = hash(position.xy * 7.31 + instance.xz);
     float squashSeed = hash(instance.xz * 3.7);
     vec3 squash = vec3(1.0, mix(0.35, 1.0, squashSeed), 1.0);
     vec3 local = position * squash * instance.w * mix(0.45, 1.55, wobble);
+
+    float speed = length(instanceVelocity);
+    if (speed > 0.5)
+    {
+        vec3 direction = instanceVelocity / speed;
+        float stretch = min(1.0 + speed * 0.35, 3.5) - 1.0;
+        local += direction * dot(local, direction) * stretch;
+    }
+
     vec3 world = instance.xyz + local;
     vNormal = normalize(position);
     vColor = instanceColor;

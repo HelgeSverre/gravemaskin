@@ -105,10 +105,14 @@ void main()
            1, Vector3(-0.35f, 0.42f, 0.28f), Vector3(0.1f, 0.22f, 0.1f), Vector3(0.1f, 0.1f, 0.11f), 0.0f // exhaust
            1, Vector3(-0.28f, 0.38f, -0.2f), Vector3(0.45f, 0.1f, 0.4f), Vector3(0.78f, 0.4f, 0.07f), 0.0f // engine hood
            1, Vector3(-0.75f, -0.1f, 0.0f), Vector3(0.45f, 0.5f, 0.9f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // counterweight
-           2, Vector3.Zero, Vector3(1.9f, 0.18f, 0.15f), Vector3(0.85f, 0.45f, 0.08f), 0.0f // boom
-           2, Vector3(-0.3f, 0.1f, 0.0f), Vector3(1.1f, 0.1f, 0.17f), Vector3(0.75f, 0.39f, 0.07f), 0.0f // boom flange
-           3, Vector3.Zero, Vector3(1.1f, 0.14f, 0.12f), Vector3(0.85f, 0.45f, 0.08f), 0.0f // stick
-           3, Vector3(-0.25f, 0.08f, 0.0f), Vector3(0.55f, 0.08f, 0.14f), Vector3(0.75f, 0.39f, 0.07f), 0.0f // stick flange
+           // Gooseneck boom: two angled segments meeting at a raised knee —
+           // the single silhouette feature that makes an excavator arm.
+           2, Vector3(-0.5f, 0.08f, 0.0f), Vector3(1.12f, 0.24f, 0.16f), Vector3(0.85f, 0.45f, 0.08f), 0.32f // boom lower
+           2, Vector3(0.48f, 0.13f, 0.0f), Vector3(1.15f, 0.19f, 0.15f), Vector3(0.85f, 0.45f, 0.08f), -0.24f // boom upper
+           2, Vector3(-0.05f, 0.26f, 0.0f), Vector3(0.34f, 0.16f, 0.17f), Vector3(0.75f, 0.39f, 0.07f), 0.04f // boom knee
+           3, Vector3(-0.2f, 0.0f, 0.0f), Vector3(0.75f, 0.16f, 0.13f), Vector3(0.85f, 0.45f, 0.08f), 0.0f // stick root
+           3, Vector3(0.33f, 0.0f, 0.0f), Vector3(0.5f, 0.12f, 0.11f), Vector3(0.82f, 0.43f, 0.08f), -0.06f // stick taper
+           3, Vector3(-0.25f, 0.09f, 0.0f), Vector3(0.5f, 0.07f, 0.14f), Vector3(0.75f, 0.39f, 0.07f), 0.0f // stick flange
            2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.1f, 0.24f, 0.2f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // boom pivot boss
            3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.08f, 0.19f, 0.16f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // stick pivot boss
            4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // bucket pivot boss
@@ -240,7 +244,9 @@ void main()
     let grainVbo = gl.GenBuffer()
     let grainIbo = gl.GenBuffer()
     let grainInstanceVbo = gl.GenBuffer()
-    let grainScratch = Array.zeroCreate<float32> (200_000 * instanceFloats)
+    // pos3+size, color3, velocity3.
+    let grainInstanceFloats = 10
+    let grainScratch = Array.zeroCreate<float32> (200_000 * grainInstanceFloats)
 
     /// Deterministic per-(clump,grain) hash → [0,1).
     let hash01 (seed: int) =
@@ -274,7 +280,16 @@ void main()
         let loosen = 1.0f + (1.0f - float32 state.Compaction.[index] / 255.0f) * 0.25f
         // Wet ground reads darker — the classic soaked-soil cue.
         let darken = 1.0f - 0.38f * float32 state.Moisture.[index] / 255.0f
-        baseColor * loosen * darken
+        // Steep faces expose raw substrate: blend toward a rocky tone by
+        // slope so cut walls and scarps separate from the flats.
+        let hL = state.Heights.[state.ColumnIndex(max 0 (cx - 1), cz)]
+        let hR = state.Heights.[state.ColumnIndex(min (config.CellsX - 1) (cx + 1), cz)]
+        let hD = state.Heights.[state.ColumnIndex(cx, max 0 (cz - 1))]
+        let hU = state.Heights.[state.ColumnIndex(cx, min (config.CellsZ - 1) (cz + 1))]
+        let slope = (abs (hL - hR) + abs (hD - hU)) / (2.0f * config.CellSize)
+        let rockiness = Math.Clamp((slope - 0.8f) * 0.5f, 0.0f, 0.55f)
+        let rockTone = Vector3(0.42f, 0.38f, 0.33f)
+        Vector3.Lerp(baseColor * loosen * darken, rockTone, rockiness)
 
     let cornerHeight (x: int) (z: int) =
         let config = state.Config
@@ -322,9 +337,19 @@ void main()
             let h10 = cornerHeightScratch.[iz * cornerVerts + ix + 1]
             let h01 = cornerHeightScratch.[(iz + 1) * cornerVerts + ix]
             let h11 = cornerHeightScratch.[(iz + 1) * cornerVerts + ix + 1]
-            let bottom = h00 + (h10 - h00) * tx
-            let top = h01 + (h11 - h01) * tx
-            bottom + (top - bottom) * tz
+            let lo = min (min h00 h10) (min h01 h11)
+            let hi = max (max h00 h10) (max h01 h11)
+
+            if hi - lo > 0.32f then
+                // Edge-aware: a dig cut is a CLIFF — blending across it
+                // melts trenches into dimples. Snap to the nearest corner.
+                let cx = if tx < 0.5f then 0 else 1
+                let cz = if tz < 0.5f then 0 else 1
+                cornerHeightScratch.[(iz + cz) * cornerVerts + ix + cx]
+            else
+                let bottom = h00 + (h10 - h00) * tx
+                let top = h01 + (h11 - h01) * tx
+                bottom + (top - bottom) * tz
 
         let mutable i = 0
 
@@ -425,13 +450,16 @@ void main()
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, grainInstanceVbo)
 
         do
-            let instanceStride = uint32 (instanceFloats * 4)
+            let instanceStride = uint32 (grainInstanceFloats * 4)
             gl.EnableVertexAttribArray 1u
             gl.VertexAttribPointer(1u, 4, VertexAttribPointerType.Float, false, instanceStride, IntPtr.Zero.ToPointer())
             gl.VertexAttribDivisor(1u, 1u)
             gl.EnableVertexAttribArray 2u
             gl.VertexAttribPointer(2u, 3, VertexAttribPointerType.Float, false, instanceStride, IntPtr(16).ToPointer())
             gl.VertexAttribDivisor(2u, 1u)
+            gl.EnableVertexAttribArray 3u
+            gl.VertexAttribPointer(3u, 3, VertexAttribPointerType.Float, false, instanceStride, IntPtr(28).ToPointer())
+            gl.VertexAttribDivisor(3u, 1u)
 
         // Clod mesh + instance buffer.
         gl.BindVertexArray clodVao
@@ -694,11 +722,20 @@ void main()
 
         // ---- the grain layer: pool grains + clump clusters ----
         let mutable grainInstances = 0
-        let grainCapacity = grainScratch.Length / instanceFloats
+        let grainCapacity = grainScratch.Length / grainInstanceFloats
 
-        let inline pushGrain (x: float32) (y: float32) (z: float32) (size: float32) (color: Vector3) =
+        let inline pushGrainMoving
+            (x: float32)
+            (y: float32)
+            (z: float32)
+            (size: float32)
+            (color: Vector3)
+            (vx: float32)
+            (vy: float32)
+            (vz: float32)
+            =
             if grainInstances < grainCapacity then
-                let baseIndex = grainInstances * instanceFloats
+                let baseIndex = grainInstances * grainInstanceFloats
                 grainScratch.[baseIndex] <- x
                 grainScratch.[baseIndex + 1] <- y
                 grainScratch.[baseIndex + 2] <- z
@@ -706,15 +743,32 @@ void main()
                 grainScratch.[baseIndex + 4] <- color.X
                 grainScratch.[baseIndex + 5] <- color.Y
                 grainScratch.[baseIndex + 6] <- color.Z
+                grainScratch.[baseIndex + 7] <- vx
+                grainScratch.[baseIndex + 8] <- vy
+                grainScratch.[baseIndex + 9] <- vz
                 grainInstances <- grainInstances + 1
+
+        let inline pushGrain (x: float32) (y: float32) (z: float32) (size: float32) (color: Vector3) =
+            pushGrainMoving x y z size color 0.0f 0.0f 0.0f
 
         // Falling/resting grains from the pool, wet ones darker, each with a
         // stable per-slot tint so a stream shimmers instead of banding.
         for i in 0 .. grains.Count - 1 do
             let baseColor = materialColor grains.Materials.[i]
-            let darken = 1.0f - 0.4f * float32 grains.Wetness.[i] / 255.0f
-            let tint = 0.82f + hash01 i * 0.36f
-            pushGrain grains.PositionsX.[i] grains.PositionsY.[i] grains.PositionsZ.[i] grains.Sizes.[i] (baseColor * darken * tint)
+            let darken = 1.0f - 0.32f * float32 grains.Wetness.[i] / 255.0f
+            // Lighter than before: instanced spheres shade half-dark, so a
+            // neutral tint read as coffee beans against the lit ground.
+            let tint = 1.0f + hash01 i * 0.35f
+
+            pushGrainMoving
+                grains.PositionsX.[i]
+                grains.PositionsY.[i]
+                grains.PositionsZ.[i]
+                grains.Sizes.[i]
+                (baseColor * darken * tint)
+                grains.VelocitiesX.[i]
+                grains.VelocitiesY.[i]
+                grains.VelocitiesZ.[i]
 
         // Payload heap: the dug material sits IN the bucket as a mound of
         // grains that grows while digging and drains while pouring.
@@ -807,7 +861,7 @@ void main()
                 gl
                 BufferTargetARB.ArrayBuffer
                 grainScratch
-                (grainInstances * instanceFloats)
+                (grainInstances * grainInstanceFloats)
                 BufferUsageARB.StreamDraw
 
             gl.DrawElementsInstanced(
