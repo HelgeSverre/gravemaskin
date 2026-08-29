@@ -24,6 +24,7 @@ type Renderer(gl: GL, state: SoilState) =
     let terrainProgram = GlUtil.program gl Shaders.terrainVertex Shaders.terrainFragment
     let clodProgram = GlUtil.program gl Shaders.clodVertex Shaders.clodFragment
     let solidProgram = GlUtil.program gl Shaders.solidVertex Shaders.clodFragment
+    let grainProgram = GlUtil.program gl Shaders.grainVertex Shaders.clodFragment
 
     let skyProgram =
         GlUtil.program
@@ -105,12 +106,13 @@ void main()
            2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.1f, 0.24f, 0.2f), Vector3(0.3f, 0.3f, 0.32f) // boom pivot boss
            3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.08f, 0.19f, 0.16f), Vector3(0.3f, 0.3f, 0.32f) // stick pivot boss
            4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), Vector3(0.3f, 0.3f, 0.32f) // bucket pivot boss
-           4, Vector3(0.24f, -0.21f, -0.2f), Vector3(0.1f, 0.09f, 0.05f), Vector3(0.32f, 0.3f, 0.28f) // tooth
-           4, Vector3(0.24f, -0.21f, -0.067f), Vector3(0.1f, 0.09f, 0.05f), Vector3(0.32f, 0.3f, 0.28f) // tooth
-           4, Vector3(0.24f, -0.21f, 0.067f), Vector3(0.1f, 0.09f, 0.05f), Vector3(0.32f, 0.3f, 0.28f) // tooth
-           4, Vector3(0.24f, -0.21f, 0.2f), Vector3(0.1f, 0.09f, 0.05f), Vector3(0.32f, 0.3f, 0.28f) // tooth
+           4, Vector3(0.3f, -0.2f, -0.2f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f) // tooth
+           4, Vector3(0.3f, -0.2f, -0.067f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f) // tooth
+           4, Vector3(0.3f, -0.2f, 0.067f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f) // tooth
+           4, Vector3(0.3f, -0.2f, 0.2f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f) // tooth
            4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), Vector3(0.2f, 0.2f, 0.22f) // bucket floor
            4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), Vector3(0.2f, 0.2f, 0.22f) // bucket back
+           4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), Vector3(0.22f, 0.22f, 0.24f) // bucket shell top
            4, Vector3(0.0f, 0.0f, -0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f) // bucket side
            4, Vector3(0.0f, 0.0f, 0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f) |] // bucket side
 
@@ -743,6 +745,10 @@ void main()
                     (baseColor * tint)
 
         if grainInstances > 0 then
+            gl.UseProgram grainProgram
+            gl.UniformMatrix4(gl.GetUniformLocation(grainProgram, "viewProjection"), 1u, false, &vp.M11)
+            GlUtil.uniform3f gl grainProgram "sunDirection" sun
+            GlUtil.uniform3f gl grainProgram "cameraPosition" cameraPosition
             gl.BindVertexArray grainVao
             gl.BindBuffer(BufferTargetARB.ArrayBuffer, grainInstanceVbo)
 
@@ -765,7 +771,7 @@ void main()
     /// creates a fresh renderer against the new soil state.
     interface IDisposable with
         member _.Dispose() =
-            for program in [| terrainProgram; clodProgram; solidProgram; skyProgram |] do
+            for program in [| terrainProgram; clodProgram; solidProgram; grainProgram; skyProgram |] do
                 gl.DeleteProgram program
 
             for tile in 0 .. tileCount - 1 do

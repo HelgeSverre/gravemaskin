@@ -488,7 +488,9 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             if m.StallActive then
                 events.Add HydraulicStall
 
-            if m.ChassisTilt > 0.20f then
+            // 0.38 rad ≈ 22°: genuinely sketchy for a tracked machine —
+            // parking on ordinary hillsides (10–15°) is not a warning.
+            if m.ChassisTilt > 0.38f then
                 events.Add TipWarning
         | None -> ()
 

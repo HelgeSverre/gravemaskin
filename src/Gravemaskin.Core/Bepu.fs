@@ -126,11 +126,11 @@ module Bepu =
 
         simulation.Bodies.Add(&desc)
 
-    /// Open-top bucket: a dynamic compound of four plates (bottom, back,
-    /// two sides). The opening faces −X/+Y in local space: curl is a −Z
-    /// rotation, which swings a −X opening upward — so a curled bucket
-    /// cradles clumps and a dumped one pours them (a +X opening does the
-    /// exact opposite; found out empirically).
+    /// Bucket: a dynamic compound of five plates (floor, back, top shell,
+    /// two sides) with ONE opening — the mouth at −X. Curl is a −Z rotation,
+    /// which swings the mouth upward: a curled bucket cradles clumps, a
+    /// dumped one pours them, and the closed top reads as the shell of a
+    /// real bucket instead of an upright bin.
     let addDynamicOpenBucket
         (simulation: Simulation)
         (pool: BepuUtilities.Memory.BufferPool)
@@ -139,17 +139,23 @@ module Bepu =
         (mass: float32)
         =
         let thickness = size.Y * 0.15f
-        let mutable builder = new CompoundBuilder(pool, simulation.Shapes, 4)
+        let mutable builder = new CompoundBuilder(pool, simulation.Shapes, 5)
 
         let addPlate (plateSize: Vector3) (offset: Vector3) (weight: float32) =
             let shape = Box(plateSize.X, plateSize.Y, plateSize.Z)
             let pose = RigidPose(offset)
             builder.Add(&shape, &pose, weight)
 
-        addPlate (Vector3(size.X, thickness, size.Z)) (Vector3(0.0f, -(size.Y - thickness) * 0.5f, 0.0f)) (mass * 0.4f)
-        addPlate (Vector3(thickness, size.Y, size.Z)) (Vector3((size.X - thickness) * 0.5f, 0.0f, 0.0f)) (mass * 0.3f)
-        addPlate (Vector3(size.X, size.Y, thickness)) (Vector3(0.0f, 0.0f, -(size.Z - thickness) * 0.5f)) (mass * 0.15f)
-        addPlate (Vector3(size.X, size.Y, thickness)) (Vector3(0.0f, 0.0f, (size.Z - thickness) * 0.5f)) (mass * 0.15f)
+        addPlate (Vector3(size.X, thickness, size.Z)) (Vector3(0.0f, -(size.Y - thickness) * 0.5f, 0.0f)) (mass * 0.32f)
+        addPlate (Vector3(thickness, size.Y, size.Z)) (Vector3((size.X - thickness) * 0.5f, 0.0f, 0.0f)) (mass * 0.24f)
+        // Top shell: covers the rear 70% — the mouth keeps a wide lip.
+        addPlate
+            (Vector3(size.X * 0.7f, thickness, size.Z))
+            (Vector3(size.X * 0.15f, (size.Y - thickness) * 0.5f, 0.0f))
+            (mass * 0.2f)
+
+        addPlate (Vector3(size.X, size.Y, thickness)) (Vector3(0.0f, 0.0f, -(size.Z - thickness) * 0.5f)) (mass * 0.12f)
+        addPlate (Vector3(size.X, size.Y, thickness)) (Vector3(0.0f, 0.0f, (size.Z - thickness) * 0.5f)) (mass * 0.12f)
 
         let mutable children = Unchecked.defaultof<BepuUtilities.Memory.Buffer<CompoundChild>>
         let mutable inertia = Unchecked.defaultof<BodyInertia>

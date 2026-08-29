@@ -95,9 +95,9 @@ type GrainPool(capacity: int, state: SoilState) =
 
         // Grain size by material: sand fine, gravel chunky.
         let baseSize =
-            if props.FrictionAngle > 0.72f then 0.030f // gravel
-            elif props.Cohesion > 3.0f<kPa> then 0.024f // clay/turf: crumbs
-            else 0.017f // sands, topsoil
+            if props.FrictionAngle > 0.72f then 0.026f // gravel
+            elif props.Cohesion > 3.0f<kPa> then 0.019f // clay/turf: crumbs
+            else 0.013f // sands, topsoil
 
         for _ in 1..grains do
             let jitterVelocity =
@@ -192,15 +192,32 @@ type GrainPool(capacity: int, state: SoilState) =
 
                 if here - lowestNeighbor > MathF.Tan props.FrictionAngle * step * 1.4f then
                     // Avalanche: this spot is over-steep — take the grain's
-                    // contribution back out of the pile and let it tumble.
+                    // contribution back out of the pile and let it slide off
+                    // downhill (no upward pop: avalanches slump, they don't
+                    // leap).
                     let cell = pileIndex x z
                     pile.[cell] <- max (pile.[cell] - sizes.[i] * 0.9f) 0.0f
                     restTimers.[i] <- -1.0f
-                    velocitiesY.[i] <- 0.5f
+
+                    let gradientX =
+                        this.GroundHeight(x + step, z) - this.GroundHeight(x - step, z)
+
+                    let gradientZ =
+                        this.GroundHeight(x, z + step) - this.GroundHeight(x, z - step)
+
+                    velocitiesX.[i] <- -gradientX * 2.0f
+                    velocitiesY.[i] <- 0.0f
+                    velocitiesZ.[i] <- -gradientZ * 2.0f
                     i <- i + 1
-                elif here < positionsY.[i] - sizes.[i] - 0.06f then
-                    // Support vanished (dug away / pile decayed): fall again.
+                elif here < positionsY.[i] - sizes.[i] - 0.25f then
+                    // Support truly vanished (dug out from under): fall.
                     restTimers.[i] <- -1.0f
+                    i <- i + 1
+                elif here < positionsY.[i] - sizes.[i] - 0.005f then
+                    // Support sank a little (pile decaying into the terrain
+                    // mesh): follow it down QUIETLY and stay at rest — the
+                    // old re-fall here made settled piles shimmer forever.
+                    positionsY.[i] <- here + sizes.[i]
                     i <- i + 1
                 elif restTimers.[i] > 9.0f then
                     // Expired: the settled mass is in the terrain by now.

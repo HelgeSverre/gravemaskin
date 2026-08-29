@@ -79,8 +79,8 @@ type AudioSystem(volume: float32) =
                 playOneShot pourBuffer 0.6f
             | RockStruck -> playOneShot clankBuffer 0.7f
             | TipWarning when beepCooldown = 0.0f ->
-                beepCooldown <- 0.5f
-                playOneShot beepBuffer 0.5f
+                beepCooldown <- 2.5f
+                playOneShot beepBuffer 0.45f
             | _ -> ()
 
     interface IDisposable with

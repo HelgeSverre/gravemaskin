@@ -85,6 +85,41 @@ void main()
 }
 """
 
+    /// Grains: heavily hash-deformed and randomly flattened per instance —
+    /// angular specks and flakes, not beads.
+    let grainVertex =
+        """#version 410 core
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec4 instance;      // xyz = world pos, w = size
+layout(location = 2) in vec3 instanceColor;
+
+uniform mat4 viewProjection;
+
+out vec3 vNormal;
+out vec3 vColor;
+out vec3 vWorld;
+
+float hash(vec2 p)
+{
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void main()
+{
+    // Per-vertex-per-instance jaggedness: 0.45..1.55 radius wobble makes
+    // shards; per-instance squash turns some grains into flakes.
+    float wobble = hash(position.xy * 7.31 + instance.xz);
+    float squashSeed = hash(instance.xz * 3.7);
+    vec3 squash = vec3(1.0, mix(0.35, 1.0, squashSeed), 1.0);
+    vec3 local = position * squash * instance.w * mix(0.45, 1.55, wobble);
+    vec3 world = instance.xyz + local;
+    vNormal = normalize(position);
+    vColor = instanceColor;
+    vWorld = world;
+    gl_Position = viewProjection * vec4(world, 1.0);
+}
+"""
+
     let clodVertex =
         """#version 410 core
 layout(location = 0) in vec3 position;      // unit icosahedron

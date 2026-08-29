@@ -566,7 +566,7 @@ let main args =
                 margin,
                 margin + line * 6.0f,
                 uiScale * 0.8f,
-                (if tiltDegrees > 11.0f then red else white),
+                (if tiltDegrees > 18.0f then red else white),
                 $"TILT %.0f{tiltDegrees}"
             )
 
