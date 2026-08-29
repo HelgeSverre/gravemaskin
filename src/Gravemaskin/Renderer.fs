@@ -16,7 +16,7 @@ type Renderer(gl: GL, state: SoilState) =
     // blended across material boundaries. Collision stays at column
     // resolution (physics is unchanged); this is purely finer visuals.
     [<Literal>]
-    let SubRes = 2
+    let SubRes = 4
 
     let tileVerts = SoilConfig.TileSize * SubRes + 1
     let cornerVerts = SoilConfig.TileSize + 1
@@ -102,6 +102,13 @@ void main()
            2, Vector3(-0.3f, 0.1f, 0.0f), Vector3(1.1f, 0.1f, 0.17f), Vector3(0.75f, 0.39f, 0.07f) // boom flange
            3, Vector3.Zero, Vector3(1.1f, 0.14f, 0.12f), Vector3(0.85f, 0.45f, 0.08f) // stick
            3, Vector3(-0.25f, 0.08f, 0.0f), Vector3(0.55f, 0.08f, 0.14f), Vector3(0.75f, 0.39f, 0.07f) // stick flange
+           2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.1f, 0.24f, 0.2f), Vector3(0.3f, 0.3f, 0.32f) // boom pivot boss
+           3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.08f, 0.19f, 0.16f), Vector3(0.3f, 0.3f, 0.32f) // stick pivot boss
+           4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), Vector3(0.3f, 0.3f, 0.32f) // bucket pivot boss
+           4, Vector3(0.24f, -0.21f, -0.2f), Vector3(0.1f, 0.09f, 0.05f), Vector3(0.32f, 0.3f, 0.28f) // tooth
+           4, Vector3(0.24f, -0.21f, -0.067f), Vector3(0.1f, 0.09f, 0.05f), Vector3(0.32f, 0.3f, 0.28f) // tooth
+           4, Vector3(0.24f, -0.21f, 0.067f), Vector3(0.1f, 0.09f, 0.05f), Vector3(0.32f, 0.3f, 0.28f) // tooth
+           4, Vector3(0.24f, -0.21f, 0.2f), Vector3(0.1f, 0.09f, 0.05f), Vector3(0.32f, 0.3f, 0.28f) // tooth
            4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), Vector3(0.2f, 0.2f, 0.22f) // bucket floor
            4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), Vector3(0.2f, 0.2f, 0.22f) // bucket back
            4, Vector3(0.0f, 0.0f, -0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f) // bucket side
@@ -225,7 +232,7 @@ void main()
     let grainVbo = gl.GenBuffer()
     let grainIbo = gl.GenBuffer()
     let grainInstanceVbo = gl.GenBuffer()
-    let grainScratch = Array.zeroCreate<float32> (90_000 * instanceFloats)
+    let grainScratch = Array.zeroCreate<float32> (200_000 * instanceFloats)
 
     /// Deterministic per-(clump,grain) hash → [0,1).
     let hash01 (seed: int) =
@@ -322,7 +329,8 @@ void main()
                 // doesn't read as vinyl. Deterministic in world space, so
                 // tile borders agree.
                 let micro =
-                    (Noise.value2 1913 (Vector2(worldX * 2.1f, worldZ * 2.1f)) - 0.5f) * 0.05f
+                    (Noise.value2 1913 (Vector2(worldX * 2.1f, worldZ * 2.1f)) - 0.5f) * 0.045f
+                    + (Noise.value2 7477 (Vector2(worldX * 9.3f, worldZ * 9.3f)) - 0.5f) * 0.018f
 
                 let h = heightAt (float32 x) (float32 z) + micro
                 let step = 1.0f
@@ -718,7 +726,7 @@ void main()
 
             let radius = current.Radius.[i]
             let baseColor = materialColor current.Materials.[i]
-            let pieces = Math.Clamp(int (radius * 55.0f), 6, 22)
+            let pieces = Math.Clamp(int (radius * 130.0f), 10, 44)
 
             for k in 0 .. pieces - 1 do
                 let seed = handle * 31 + k
@@ -731,7 +739,7 @@ void main()
                     (px + ox)
                     (py + oy)
                     (pz + oz)
-                    (radius * (0.34f + hash01 (seed + 404) * 0.22f))
+                    (radius * (0.22f + hash01 (seed + 404) * 0.16f))
                     (baseColor * tint)
 
         if grainInstances > 0 then

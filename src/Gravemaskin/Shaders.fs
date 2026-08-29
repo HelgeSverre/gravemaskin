@@ -49,7 +49,9 @@ void main()
     float sun = max(dot(n, sunDirection), 0.0);
     // Hemispheric ambient: sky-blue-grey from above, ground bounce below.
     vec3 ambient = mix(vec3(0.18, 0.16, 0.14), vec3(0.35, 0.37, 0.40), n.y * 0.5 + 0.5);
-    float grain = mix(0.92, 1.08, hash(floor(vWorld.xz * 8.0)));
+    float grain = mix(0.93, 1.07, hash(floor(vWorld.xz * 8.0)))
+                * mix(0.94, 1.06, hash(floor(vWorld.xz * 37.0)))
+                * mix(0.97, 1.03, hash(floor(vWorld.xz * 131.0)));
     vec3 lit = vColor * grain * (ambient + vec3(1.0, 0.96, 0.88) * sun * 0.9);
 
     // Distance fog toward an overcast horizon.

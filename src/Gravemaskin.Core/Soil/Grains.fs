@@ -31,8 +31,9 @@ type GrainPool(capacity: int, state: SoilState) =
     // pools do the same — the newest motion is what the eye follows).
     let mutable writeCursor = 0
 
-    // Visual pile field at 2× column resolution.
-    let pileResolution = 2
+    // Visual pile field at 4× column resolution (6 cm cells): cones and
+    // avalanche fronts resolve finely enough to read as granular.
+    let pileResolution = 4
     let pileCellSize = state.Config.CellSize / float32 pileResolution
     let pileWidth = state.Config.CellsX * pileResolution
     let pileDepth = state.Config.CellsZ * pileResolution
@@ -94,9 +95,9 @@ type GrainPool(capacity: int, state: SoilState) =
 
         // Grain size by material: sand fine, gravel chunky.
         let baseSize =
-            if props.FrictionAngle > 0.72f then 0.045f // gravel
-            elif props.Cohesion > 3.0f<kPa> then 0.038f // clay/turf: crumbs
-            else 0.028f // sands, topsoil
+            if props.FrictionAngle > 0.72f then 0.030f // gravel
+            elif props.Cohesion > 3.0f<kPa> then 0.024f // clay/turf: crumbs
+            else 0.017f // sands, topsoil
 
         for _ in 1..grains do
             let jitterVelocity =

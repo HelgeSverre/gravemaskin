@@ -192,7 +192,7 @@ let main args =
 
         world.SpawnMachineRig(rig, Vector3(32.0f, 0.0f, 32.0f)) |> ignore
         world.SeedRocks 48
-        grains <- GrainPool(45_000, state)
+        grains <- GrainPool(120_000, state)
         renderer <- new Renderer(gl, state)
         hud <- Hud(gl)
 
@@ -307,7 +307,7 @@ let main args =
                 (world :> IDisposable).Dispose()
                 world <- loadedWorld
                 state <- world.SoilState.Value
-                grains <- GrainPool(45_000, state)
+                grains <- GrainPool(120_000, state)
                 (renderer :> IDisposable).Dispose()
                 renderer <- new Renderer(gl, state)
                 world.SnapshotInto previous
@@ -453,17 +453,22 @@ let main args =
                     | SoilDumped(mass, dumpedMat) ->
                         // A pouring stream: grains inherit the bucket edge's
                         // motion and rain out of the opening.
+                        // Dirt leaves a bucket downward however fast the
+                        // bucket itself is swinging up — clamp the vertical.
+                        let pourVelocity =
+                            Vector3(tipVelocity.X, MathF.Min(tipVelocity.Y, 0.2f) - 0.6f, tipVelocity.Z)
+
                         grains.SpawnBurst(
                             tip + Vector3(0.0f, -0.05f, 0.0f),
-                            tipVelocity + Vector3(0.0f, -0.6f, 0.0f),
+                            pourVelocity,
                             0.35f,
                             Volume.materialOfByte dumpedMat,
                             moistByte,
-                            Math.Clamp(int (mass * 70.0f), 10, 200)
+                            Math.Clamp(int (mass * 220.0f), 20, 550)
                         )
                     | DigStarted ->
                         // Crumble off the cutting edge while carving.
-                        grains.SpawnBurst(tip, tipVelocity * 0.5f, 0.9f, tipMaterial, moistByte, 28)
+                        grains.SpawnBurst(tip, tipVelocity * 0.5f, 0.9f, tipMaterial, moistByte, 70)
                     | WallCollapsed ->
                         // The wedge clumps burst into clusters on their own;
                         // add a dust breath at the machine's general area.
@@ -486,7 +491,7 @@ let main args =
                                 0.8f,
                                 Volume.materialOfByte trackMat,
                                 trackMoist,
-                                2
+                                6
                             )
             | None -> ()
 
@@ -514,7 +519,7 @@ let main args =
                 300.0f
             )
 
-        renderer.RebuildDirtyTiles 8
+        renderer.RebuildDirtyTiles 4
         let alpha = float32 (accumulator / fixedStep)
         renderer.Draw(view * projection, cameraPosition, previous, current, alpha, grains, brushHit, brushRadius)
 

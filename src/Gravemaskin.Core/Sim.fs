@@ -263,9 +263,16 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             | ValueSome(released, materialIndex) ->
                 events.Add(SoilDumped(float32 released, byte materialIndex))
 
+                // Dirt slides out with the bucket BODY's motion; the lip's
+                // rotational velocity would catapult it skyward.
+                let bodyVelocity = physics.Simulation.Bodies.[m.Bucket].Velocity.Linear
+
+                let pourVelocity =
+                    Vector3(bodyVelocity.X, System.MathF.Min(bodyVelocity.Y, 0.2f) - 0.4f, bodyVelocity.Z)
+
                 this.SpawnClump(
                     edge + Vector3(0.0f, -0.1f, 0.0f),
-                    edgeVelocity,
+                    pourVelocity,
                     released,
                     Volume.materialOfByte (byte materialIndex)
                 )
