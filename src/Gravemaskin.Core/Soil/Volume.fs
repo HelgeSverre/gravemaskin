@@ -297,8 +297,10 @@ module Volume =
 
         for z in 0 .. config.CellsZ - 1 do
             for x in 0 .. config.CellsX - 1 do
+                // Broad landforms (long wavelength) so there are workable
+                // flats between the hills — it's a dig site, not the Alps.
                 let point =
-                    System.Numerics.Vector2(float32 x * 0.045f, float32 z * 0.045f)
+                    System.Numerics.Vector2(float32 x * 0.02f, float32 z * 0.02f)
 
                 let height =
                     baseHeight + (Noise.fbm2 seed 4 point - 0.5f) * 2.0f * relief

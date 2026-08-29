@@ -24,3 +24,18 @@ SPEC lists `Soil/Api.fs` above `Soil/Volume.fs`, but F# compile order forbids
 a facade before the types it re-exposes. The seam survives as the LAST soil
 file (`Soil/Api.fs` defining the `Soil` module); the rule stands: `Sim.fs` and
 `Excavator/*` call only the `Soil` facade, never chunk internals.
+
+## 2026-08-29 — Deferred items closed
+
+- **Moisture dynamics**: implemented as a water-table model (Soil/Moisture.fs)
+  — moisture is a property of the ground, wicking up and evaporating, driving
+  effective cohesion (capillary sandcastle bell, clay saturation weakening).
+- **Compound bucket**: open-plate dynamic compound (bottom/back/sides);
+  opening faces −X so curl swings it up. Cradles bodies, scoops loose clumps
+  into the payload.
+- **Renderer GL leak on F9 load**: Renderer implements IDisposable; the load
+  path disposes before rebuilding.
+- **Surface Nets**: still not used — the render mesh is now a 2×-subdivided,
+  bilinearly smoothed heightfield with micro-noise and crevice AO, which
+  delivers the smooth-dirt goal Surface Nets was for. The soil model remains
+  2.5D columns; Surface Nets only earns its place if overhangs ever exist.

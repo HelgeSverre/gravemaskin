@@ -58,7 +58,8 @@ format that accounts for every kilogram before it lets you quit.
 
 ## Status
 
-Playable sandbox, built in the open. macOS, Windows, and Linux.
+A 64×64 m sandbox of grass meadows, sand, gravel, wet lowlands, and clay —
+playable and built in the open. macOS, Windows, and Linux.
 `just run` starts it; F1 toggles a free camera with a terrain-sculpting
 brush; F5/F9 save and load; `--machine 320` brings the big iron.
 

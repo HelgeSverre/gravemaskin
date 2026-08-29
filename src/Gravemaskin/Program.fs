@@ -187,7 +187,7 @@ let main args =
 
         world.SpawnMachineRig(rig, Vector3(32.0f, 0.0f, 32.0f)) |> ignore
         world.SeedRocks 48
-        renderer <- Renderer(gl, state)
+        renderer <- new Renderer(gl, state)
         hud <- Hud(gl)
 
         // Audio is best-effort: no OpenAL, no problem, the game plays silent.
@@ -301,9 +301,8 @@ let main args =
                 (world :> IDisposable).Dispose()
                 world <- loadedWorld
                 state <- world.SoilState.Value
-                // ponytail: the old renderer's GL objects leak on load — a
-                // few hundred KB per load, cleanup when it ever matters.
-                renderer <- Renderer(gl, state)
+                (renderer :> IDisposable).Dispose()
+                renderer <- new Renderer(gl, state)
                 world.SnapshotInto previous
                 world.SnapshotInto current
             | None -> ()
