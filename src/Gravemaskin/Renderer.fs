@@ -85,36 +85,42 @@ void main()
     let cubeVbo = gl.GenBuffer()
     let cubeIbo = gl.GenBuffer()
 
-    /// Visual boxes per machine body part: (body index, local offset, size, color).
+    /// Visual boxes per machine body part:
+    /// (body index, local offset, size, color, local Z rotation).
+    /// The bucket group is rotated +45°: mouth down-and-back at rest, up at
+    /// carry — the real profile. (Collision stays the proven axis-aligned
+    /// container; this is presentation.)
+    let bucketTilt = 0.785f
+
     let machineBoxes =
-        [| 0, Vector3(0.0f, -0.1f, -0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f) // track L
-           0, Vector3(0.0f, -0.1f, 0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f) // track R
-           0, Vector3(-0.85f, -0.1f, -0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f) // idler L
-           0, Vector3(-0.85f, -0.1f, 0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f) // idler R
-           0, Vector3(0.85f, -0.1f, -0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f) // sprocket L
-           0, Vector3(0.85f, -0.1f, 0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f) // sprocket R
-           0, Vector3(0.0f, 0.05f, 0.0f), Vector3(1.5f, 0.3f, 1.0f), Vector3(0.25f, 0.25f, 0.27f) // undercarriage
-           1, Vector3(0.1f, 0.0f, 0.0f), Vector3(1.05f, 0.7f, 0.95f), Vector3(0.85f, 0.45f, 0.08f) // cab body
-           1, Vector3(0.28f, 0.14f, 0.0f), Vector3(0.55f, 0.44f, 0.97f), Vector3(0.16f, 0.2f, 0.24f) // glass
-           1, Vector3(-0.35f, 0.42f, 0.28f), Vector3(0.1f, 0.22f, 0.1f), Vector3(0.1f, 0.1f, 0.11f) // exhaust
-           1, Vector3(-0.28f, 0.38f, -0.2f), Vector3(0.45f, 0.1f, 0.4f), Vector3(0.78f, 0.4f, 0.07f) // engine hood
-           1, Vector3(-0.75f, -0.1f, 0.0f), Vector3(0.45f, 0.5f, 0.9f), Vector3(0.3f, 0.3f, 0.32f) // counterweight
-           2, Vector3.Zero, Vector3(1.9f, 0.18f, 0.15f), Vector3(0.85f, 0.45f, 0.08f) // boom
-           2, Vector3(-0.3f, 0.1f, 0.0f), Vector3(1.1f, 0.1f, 0.17f), Vector3(0.75f, 0.39f, 0.07f) // boom flange
-           3, Vector3.Zero, Vector3(1.1f, 0.14f, 0.12f), Vector3(0.85f, 0.45f, 0.08f) // stick
-           3, Vector3(-0.25f, 0.08f, 0.0f), Vector3(0.55f, 0.08f, 0.14f), Vector3(0.75f, 0.39f, 0.07f) // stick flange
-           2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.1f, 0.24f, 0.2f), Vector3(0.3f, 0.3f, 0.32f) // boom pivot boss
-           3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.08f, 0.19f, 0.16f), Vector3(0.3f, 0.3f, 0.32f) // stick pivot boss
-           4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), Vector3(0.3f, 0.3f, 0.32f) // bucket pivot boss
-           4, Vector3(0.3f, -0.2f, -0.2f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f) // tooth
-           4, Vector3(0.3f, -0.2f, -0.067f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f) // tooth
-           4, Vector3(0.3f, -0.2f, 0.067f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f) // tooth
-           4, Vector3(0.3f, -0.2f, 0.2f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f) // tooth
-           4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), Vector3(0.2f, 0.2f, 0.22f) // bucket floor
-           4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), Vector3(0.2f, 0.2f, 0.22f) // bucket back
-           4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), Vector3(0.22f, 0.22f, 0.24f) // bucket shell top
-           4, Vector3(0.0f, 0.0f, -0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f) // bucket side
-           4, Vector3(0.0f, 0.0f, 0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f) |] // bucket side
+        [| 0, Vector3(0.0f, -0.1f, -0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f), 0.0f // track L
+           0, Vector3(0.0f, -0.1f, 0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f), 0.0f // track R
+           0, Vector3(-0.85f, -0.1f, -0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f), 0.0f // idler L
+           0, Vector3(-0.85f, -0.1f, 0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f), 0.0f // idler R
+           0, Vector3(0.85f, -0.1f, -0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f), 0.0f // sprocket L
+           0, Vector3(0.85f, -0.1f, 0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f), 0.0f // sprocket R
+           0, Vector3(0.0f, 0.05f, 0.0f), Vector3(1.5f, 0.3f, 1.0f), Vector3(0.25f, 0.25f, 0.27f), 0.0f // undercarriage
+           1, Vector3(0.1f, 0.0f, 0.0f), Vector3(1.05f, 0.7f, 0.95f), Vector3(0.85f, 0.45f, 0.08f), 0.0f // cab body
+           1, Vector3(0.28f, 0.14f, 0.0f), Vector3(0.55f, 0.44f, 0.97f), Vector3(0.16f, 0.2f, 0.24f), 0.0f // glass
+           1, Vector3(-0.35f, 0.42f, 0.28f), Vector3(0.1f, 0.22f, 0.1f), Vector3(0.1f, 0.1f, 0.11f), 0.0f // exhaust
+           1, Vector3(-0.28f, 0.38f, -0.2f), Vector3(0.45f, 0.1f, 0.4f), Vector3(0.78f, 0.4f, 0.07f), 0.0f // engine hood
+           1, Vector3(-0.75f, -0.1f, 0.0f), Vector3(0.45f, 0.5f, 0.9f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // counterweight
+           2, Vector3.Zero, Vector3(1.9f, 0.18f, 0.15f), Vector3(0.85f, 0.45f, 0.08f), 0.0f // boom
+           2, Vector3(-0.3f, 0.1f, 0.0f), Vector3(1.1f, 0.1f, 0.17f), Vector3(0.75f, 0.39f, 0.07f), 0.0f // boom flange
+           3, Vector3.Zero, Vector3(1.1f, 0.14f, 0.12f), Vector3(0.85f, 0.45f, 0.08f), 0.0f // stick
+           3, Vector3(-0.25f, 0.08f, 0.0f), Vector3(0.55f, 0.08f, 0.14f), Vector3(0.75f, 0.39f, 0.07f), 0.0f // stick flange
+           2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.1f, 0.24f, 0.2f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // boom pivot boss
+           3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.08f, 0.19f, 0.16f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // stick pivot boss
+           4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // bucket pivot boss
+           4, Vector3(0.3f, -0.2f, -0.2f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
+           4, Vector3(0.3f, -0.2f, -0.067f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
+           4, Vector3(0.3f, -0.2f, 0.067f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
+           4, Vector3(0.3f, -0.2f, 0.2f), Vector3(0.14f, 0.06f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
+           4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), Vector3(0.2f, 0.2f, 0.22f), bucketTilt // bucket floor
+           4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), Vector3(0.2f, 0.2f, 0.22f), bucketTilt // bucket back
+           4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), Vector3(0.22f, 0.22f, 0.24f), bucketTilt // bucket shell top
+           4, Vector3(0.0f, 0.0f, -0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f), bucketTilt // bucket side
+           4, Vector3(0.0f, 0.0f, 0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f), bucketTilt |] // bucket side
 
     // Shared index buffer: same grid topology for every tile.
     let tileIndexCount = SoilConfig.TileSize * SubRes * SoilConfig.TileSize * SubRes * 6
@@ -543,7 +549,7 @@ void main()
             GlUtil.uniform3f gl solidProgram "cameraPosition" cameraPosition
             gl.BindVertexArray cubeVao
 
-            for (part, offset, size, color) in machineBoxes do
+            for (part, offset, size, color, localRotation) in machineBoxes do
                 if part < current.MachinePartCount then
                     let offset = offset * current.MachineScale
                     let size = size * current.MachineScale
@@ -568,6 +574,7 @@ void main()
                     let mutable model =
                         Matrix4x4.CreateScale size
                         * Matrix4x4.CreateTranslation offset
+                        * Matrix4x4.CreateRotationZ localRotation
                         * Matrix4x4.CreateFromQuaternion orientation
                         * Matrix4x4.CreateTranslation position
 
@@ -708,6 +715,50 @@ void main()
             let darken = 1.0f - 0.4f * float32 grains.Wetness.[i] / 255.0f
             let tint = 0.82f + hash01 i * 0.36f
             pushGrain grains.PositionsX.[i] grains.PositionsY.[i] grains.PositionsZ.[i] grains.Sizes.[i] (baseColor * darken * tint)
+
+        // Payload heap: the dug material sits IN the bucket as a mound of
+        // grains that grows while digging and drains while pouring.
+        if current.MachinePartCount > 4 && current.PayloadKg > 0.5f then
+            let part = 4
+            let hasPrevious = part < previous.MachinePartCount
+
+            let bucketPosition =
+                if hasPrevious then
+                    Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
+                else
+                    current.MachinePositions.[part]
+
+            let bucketOrientation =
+                if hasPrevious then
+                    Quaternion.Slerp(previous.MachineOrientations.[part], current.MachineOrientations.[part], alpha)
+                else
+                    current.MachineOrientations.[part]
+
+            let scaleFactor = current.MachineScale
+            let tiltRotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, bucketTilt)
+            let fill = Math.Clamp(current.PayloadKg / MathF.Max(current.PayloadCapacityKg, 1.0f), 0.05f, 1.0f)
+            let heapGrains = int (fill * 300.0f)
+            let heapColor = materialColor current.PayloadMaterial
+
+            for k in 0 .. heapGrains - 1 do
+                let localPosition =
+                    Vector3(
+                        (hash01 (k * 7 + 1) - 0.55f) * 0.38f,
+                        -0.14f + hash01 (k * 7 + 3) * 0.26f * fill,
+                        (hash01 (k * 7 + 5) - 0.5f) * 0.46f
+                    )
+                    * scaleFactor
+
+                let world =
+                    bucketPosition
+                    + Vector3.Transform(Vector3.Transform(localPosition, tiltRotation), bucketOrientation)
+
+                pushGrain
+                    world.X
+                    world.Y
+                    world.Z
+                    (scaleFactor * (0.022f + hash01 (k * 7 + 9) * 0.02f))
+                    (heapColor * (0.8f + hash01 (k * 7 + 11) * 0.4f))
 
         // Clump clusters: the mass carrier rendered as a wad of dirt.
         for i in 0 .. current.Count - 1 do

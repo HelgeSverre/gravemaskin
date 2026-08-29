@@ -51,3 +51,24 @@ clusters; pours/dig-crumble/track-spray emit from sim events. Per the SPEC's
 cosmetic contract the layer runs on wall-clock in the shell, carries zero
 mass, and stays outside the determinism hash — the Release sim gates are
 untouched by it.
+
+## 2026-08-29 — Hard stroke limits (the 'bending backwards' question)
+
+Checked against how real machines and training sims work: a hydraulic
+cylinder is an ABSOLUTE mechanical end stop — the piston bottoms on the
+cylinder cap (with hydraulic cushioning), so a linkage joint physically
+cannot exceed the angle range its cylinder stroke defines; doing so means
+bursting steel. AGX/Vortex model stroke ends as hard unilateral constraints,
+stiffer than any relief valve. Our previous software velocity-clamp was
+game-y and leaked under load. Now every cylinder joint carries a BEPU
+TwistLimit (identity bases measure Z-twist with our exact sign convention —
+verified by spike); an abuse test drives 40/15/12 kN·m of sustained external
+torque into the joints and requires the stops to hold. The swing has no
+limit — real houses rotate continuously.
+
+Also: the bucket payload is now VISIBLE — rendered as a grain heap inside
+the bucket that grows while digging and drains while pouring — and dig
+crumble flows toward the mouth. The mass transport itself remains the
+ledgered payload scalar (the training-sim standard); the heap is its honest
+presentation. The bucket shell is drawn tilted 45° (mouth down-back at
+rest, up at carry) over the axis-aligned collision container.

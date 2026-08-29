@@ -467,8 +467,21 @@ let main args =
                             Math.Clamp(int (mass * 220.0f), 20, 550)
                         )
                     | DigStarted ->
-                        // Crumble off the cutting edge while carving.
-                        grains.SpawnBurst(tip, tipVelocity * 0.5f, 0.9f, tipMaterial, moistByte, 70)
+                        // Crumble off the cutting edge, drawn INTO the mouth
+                        // along with the bucket's sweep — the dirt visibly
+                        // flows into the bucket it's filling.
+                        let bucketCenter =
+                            world.Physics.Simulation.Bodies.[m.Bucket].Pose.Position
+
+                        let intoMouth =
+                            let toCenter = bucketCenter - tip
+
+                            if toCenter.LengthSquared() > 1e-4f then
+                                Vector3.Normalize toCenter * 1.6f
+                            else
+                                Vector3.Zero
+
+                        grains.SpawnBurst(tip, tipVelocity * 0.6f + intoMouth, 0.7f, tipMaterial, moistByte, 70)
                     | WallCollapsed ->
                         // The wedge clumps burst into clusters on their own;
                         // add a dust breath at the machine's general area.

@@ -64,16 +64,25 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
         Bepu.addHinge simulation house boom Vector3.UnitZ (boomPivot - houseCenter) (boomPivot - boomCenter)
         |> ignore
 
+        Bepu.addTwistLimit simulation house boom rig.BoomJoint.MinAngle rig.BoomJoint.MaxAngle
+        |> ignore
+
         Bepu.addAngularMotor simulation house boom Vector3.UnitZ
 
     let stickMotor =
         Bepu.addHinge simulation boom stick Vector3.UnitZ (stickPivot - boomCenter) (stickPivot - stickCenter)
         |> ignore
 
+        Bepu.addTwistLimit simulation boom stick rig.StickJoint.MinAngle rig.StickJoint.MaxAngle
+        |> ignore
+
         Bepu.addAngularMotor simulation boom stick Vector3.UnitZ
 
     let bucketMotor =
         Bepu.addHinge simulation stick bucket Vector3.UnitZ (bucketPivot - stickCenter) (bucketPivot - bucketCenter)
+        |> ignore
+
+        Bepu.addTwistLimit simulation stick bucket rig.BucketJoint.MinAngle rig.BucketJoint.MaxAngle
         |> ignore
 
         Bepu.addAngularMotor simulation stick bucket Vector3.UnitZ
@@ -305,23 +314,15 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
             let angle = jointAngle jointParents.[i] jointChildren.[i] motorAxes.[i]
             let mutable direction = MathF.Sign axis |> float32
 
-            // Software stroke limits: never command past the stop, and
-            // steer an overshot joint (momentum, external force) back
-            // toward its range instead of leaving it stranded there.
-            // Small deadband so normal dynamics AT a stop don't twitch.
-            let overshoot =
-                if angle > joint.MaxAngle + 0.03f then angle - joint.MaxAngle
-                elif angle < joint.MinAngle - 0.03f then angle - joint.MinAngle
-                else 0.0f
-
+            // Don't command into the stops; the stops themselves are hard
+            // TwistLimit constraints (a cylinder bottoming out is a
+            // structural stop — external force can't bend a joint past it).
             if (angle >= joint.MaxAngle && direction > 0.0f)
                || (angle <= joint.MinAngle && direction < 0.0f) then
                 direction <- 0.0f
 
             let velocity =
-                if overshoot <> 0.0f then
-                    Math.Clamp(-overshoot * 4.0f, -0.6f, 0.6f)
-                elif direction = 0.0f then
+                if direction = 0.0f then
                     0.0f
                 else
                     direction
@@ -408,6 +409,16 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
         let parts = partsScratch
         snapshot.MachinePartCount <- parts.Length
         snapshot.MachineScale <- scale
+        snapshot.PayloadKg <- float32 (Array.sum bucketLoad)
+        snapshot.PayloadCapacityKg <- float32 rig.BucketCapacityKg
+        // Dominant material colors the heap.
+        let mutable best = 0
+
+        for i in 1 .. MaterialCount - 1 do
+            if bucketLoad.[i] > bucketLoad.[best] then
+                best <- i
+
+        snapshot.PayloadMaterial <- byte best
 
         for i in 0 .. parts.Length - 1 do
             let bodyRef = simulation.Bodies.[parts.[i]]

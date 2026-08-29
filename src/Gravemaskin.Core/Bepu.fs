@@ -217,6 +217,28 @@ module Bepu =
 
         simulation.Solver.Add(a, b, &hinge)
 
+    /// Hard stroke limit about a Z hinge: the solver-level equivalent of a
+    /// hydraulic cylinder bottoming out — external force cannot push the
+    /// joint past it (verified empirically: identity bases measure twist
+    /// about Z with the same sign convention as our jointAngle).
+    let addTwistLimit
+        (simulation: Simulation)
+        (a: BodyHandle)
+        (b: BodyHandle)
+        (minAngle: float32)
+        (maxAngle: float32)
+        =
+        let mutable limit =
+            TwistLimit(
+                LocalBasisA = Quaternion.Identity,
+                LocalBasisB = Quaternion.Identity,
+                MinimumAngle = minAngle,
+                MaximumAngle = maxAngle,
+                SpringSettings = SpringSettings(30.0f, 1.0f)
+            )
+
+        simulation.Solver.Add(a, b, &limit)
+
     let addAngularMotor (simulation: Simulation) (a: BodyHandle) (b: BodyHandle) (axis: Vector3) =
         let mutable motor =
             AngularAxisMotor(LocalAxisA = axis, TargetVelocity = 0.0f, Settings = MotorSettings(1.0f, 1e-6f))

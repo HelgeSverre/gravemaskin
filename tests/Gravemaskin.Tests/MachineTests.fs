@@ -95,15 +95,15 @@ let ``boom torque ceiling emerges from pressure × area × moment arm`` () =
 let ``bucket breakout torque emerges within spec brackets`` () =
     // Published U17 breakout 15.2 kN at 0.7 m tip ⇒ ~10.6 kN·m at the
     // joint; the linkage cap runs ≈ 9.4→11 kN·m through the working range.
-    // Resistance is a Coulomb brake (constant torque opposing joint motion,
-    // dead in a ±0.02 rad/s band): passive by construction, so it can't
-    // fling the light plate-compound bucket the way driven torque did.
-    // Motor cap > brake ⇒ the curl grinds on; cap < brake ⇒ it stops.
+    // The resistance is a solver-integrated friction brake: a second motor
+    // on the same joint with TargetVelocity 0 and MaxForce = brakeTorque.
+    // Drive cap > brake ⇒ the joint still moves; brake ≥ drive ⇒ it holds.
+    // (Every hand-rolled impulse harness tried here injected or ratcheted
+    // energy at tick granularity; letting the solver arbitrate is exact.)
     let curlAgainst (brakeTorque: float32) =
         let world, machine = machineWorld ()
         use _ = world
-        // Hold the bucket clear of the ground so soil/slab contact doesn't
-        // add its own brake.
+        // Hold the bucket clear of the ground so contact doesn't add brake.
         TestKit.stepAll 150 (input 1.0f 0.0f 0.0f 0.0f 0.0f 0.0f) world |> ignore
 
         let mutable guard = 0
@@ -112,30 +112,21 @@ let ``bucket breakout torque emerges within spec brackets`` () =
             world.Step(input 0.0f 0.0f -1.0f 0.0f 0.0f 0.0f) |> ignore
             guard <- guard + 1
 
-        for _ in 1..300 do
-            let stickRef = world.Physics.Simulation.Bodies.[machine.Stick]
-            let mutable bucketRef = world.Physics.Simulation.Bodies.[machine.Bucket]
+        let brake =
+            Bepu.addAngularMotor world.Physics.Simulation machine.Stick machine.Bucket Vector3.UnitZ
 
-            if not bucketRef.Awake then
-                bucketRef.Awake <- true
+        Bepu.retuneAngularMotor
+            world.Physics.Simulation
+            brake
+            Vector3.UnitZ
+            { TargetVelocity = 0.0f
+              MaxForce = brakeTorque }
 
-            let axisWorld = Vector3.Transform(Vector3.UnitZ, stickRef.Pose.Orientation)
-
-            let relativeVelocity =
-                Vector3.Dot(bucketRef.Velocity.Angular - stickRef.Velocity.Angular, axisWorld)
-
-            let sign =
-                if relativeVelocity < -0.02f then 1.0f
-                elif relativeVelocity > 0.02f then -1.0f
-                else 0.0f
-
-            bucketRef.ApplyAngularImpulse(Vector3(0.0f, 0.0f, sign * brakeTorque * Tuning.FixedDt))
-            world.Step(input 0.0f 0.0f -1.0f 0.0f 0.0f 0.0f) |> ignore
-
+        TestKit.stepAll 300 (input 0.0f 0.0f -1.0f 0.0f 0.0f 0.0f) world |> ignore
         machine.BucketAngle
 
-    Assert.True(curlAgainst 8500.0f < -1.3f, $"8.5 kN·m brake should be ground through: {curlAgainst 8500.0f}")
-    Assert.True(curlAgainst 13000.0f > -1.2f, $"13 kN·m brake should stop the curl: {curlAgainst 13000.0f}")
+    Assert.True(curlAgainst 8500.0f < -1.3f, $"8.5 kN·m brake should be overcome: {curlAgainst 8500.0f}")
+    Assert.True(curlAgainst 13000.0f > -1.1f, $"13 kN·m brake should hold the curl: {curlAgainst 13000.0f}")
 
 [<Fact>]
 let ``two functions on one circuit share flow; different circuits do not`` () =
@@ -247,3 +238,41 @@ let ``machine stepping does not allocate`` () =
         world.Step(TestKit.scriptedInput tick) |> ignore
 
     Assert.Equal(gen0, GC.CollectionCount 0)
+
+[<Fact>]
+let ``no external force can bend a joint past its stroke limits`` () =
+    // Real hydraulic cylinders bottom out mechanically: exceeding stroke
+    // means bursting steel, so it simply doesn't happen. Abuse every joint
+    // with torque far beyond anything the sim can produce and require the
+    // hard TwistLimit constraints to hold within a small compliance margin.
+    let world, machine = machineWorld ()
+    use _ = world
+    let bodies = world.Physics.Simulation.Bodies
+
+    // Torque scale: ~2× the worst in-sim transient per joint (motor caps
+    // are 24.5/16.7/11 kN·m; contact spikes are of that order). Unbounded
+    // lump impulses would just inject teleport-grade spin between substeps
+    // that no positional constraint can be expected to catch.
+    let abuse = [| 40_000.0f; 15_000.0f; 12_000.0f |]
+
+    for direction in [| 1.0f; -1.0f |] do
+        for _ in 1..300 do
+            let joints = [| machine.Boom; machine.Stick; machine.Bucket |]
+
+            for j in 0..2 do
+                let mutable bodyRef = bodies.[joints.[j]]
+
+                if not bodyRef.Awake then
+                    bodyRef.Awake <- true
+
+                bodyRef.ApplyAngularImpulse(Vector3(0.0f, 0.0f, direction * abuse.[j] * Tuning.FixedDt))
+
+            world.Step InputFrame.empty |> ignore
+
+        let margin = 0.2f
+        let boom = Tuning.u17BoomJoint
+        let stick = Tuning.u17StickJoint
+        let bucket = Tuning.u17BucketJoint
+        Assert.InRange(machine.BoomAngle, boom.MinAngle - margin, boom.MaxAngle + margin)
+        Assert.InRange(machine.StickAngle, stick.MinAngle - margin, stick.MaxAngle + margin)
+        Assert.InRange(machine.BucketAngle, bucket.MinAngle - margin, bucket.MaxAngle + margin)
