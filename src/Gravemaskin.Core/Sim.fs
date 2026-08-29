@@ -87,6 +87,26 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
         machine <- Some spawned
         spawned
 
+    /// Swap the machine for another rig at the same spot. The payload is
+    /// deposited on the ground first so the ledger stays exact.
+    member this.SwapMachine(rig: MachineRig) =
+        match machine with
+        | Some m ->
+            let position = physics.Simulation.Bodies.[m.Chassis].Pose.Position
+
+            match soilState with
+            | Some state ->
+                for i in 0 .. MaterialCount - 1 do
+                    if m.BucketLoad.[i] > 0.0 then
+                        Soil.deposit state m.BucketTipPosition m.BucketLoad.[i] (Volume.materialOfByte (byte i))
+                        m.BucketLoad.[i] <- 0.0
+            | None -> ()
+
+            m.Despawn()
+            machine <- None
+            this.SpawnMachineRig(rig, Vector3(position.X, 0.0f, position.Z))
+        | None -> this.SpawnMachineRig(rig, Vector3(32.0f, 0.0f, 32.0f))
+
     member _.SpawnMachineRig(rig: MachineRig, position: Vector3) =
         let ground = surfaceHeight position.X position.Z
         let spawned = Machine(physics, rig, Vector3(position.X, ground + 0.01f, position.Z))

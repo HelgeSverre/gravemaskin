@@ -81,6 +81,18 @@ let main args =
 
     let maxFrames = argValue "--frames" |> Option.map int
     let shotTick = argValue "--shot-tick" |> Option.map int64
+    // Model-preview mode (the gun-preview idea from IRONSIGHT): flat stage,
+    // fixed camera angles, one PNG-able BMP per angle, then exit — for
+    // comparing the machine model against reference photos.
+    let previewDir = argValue "--preview"
+
+    let previewAngles =
+        [| "side", Vector3(0.0f, 0.7f, 3.0f)
+           "side-left", Vector3(0.0f, 0.7f, -3.0f)
+           "front", Vector3(4.2f, 0.9f, 0.0f)
+           "rear", Vector3(-3.4f, 0.9f, 0.0f)
+           "quarter", Vector3(2.6f, 1.5f, 2.6f)
+           "quarter-rear", Vector3(-2.4f, 1.4f, 2.4f) |]
     let demoMode = args |> Array.contains "--demo"
 
     let screenshotPath = argValue "--screenshot"
@@ -132,6 +144,8 @@ let main args =
     let mutable state = Unchecked.defaultof<SoilState>
     let mutable grains = Unchecked.defaultof<GrainPool>
     let mutable patternToggleLatch = false
+    let mutable menuOpen = false
+    let mutable menuLatch = false
     let mutable saveLatch = false
     let mutable loadLatch = false
 
@@ -182,16 +196,36 @@ let main args =
         gl <- GL.GetApi window
         input <- window.CreateInput()
 
-        world <- Sim.createTerrainWorld 0xD16D16UL
+        world <-
+            if previewDir.IsSome then
+                // Clean flat stage for model previews.
+                let config =
+                    { CellSize = 0.25f
+                      CellsX = 96
+                      CellsY = 32
+                      CellsZ = 96 }
+
+                new World(0xD16D16UL, Sim.defaultThreadCount, Some(FlatSoil(config, Topsoil, 2.0f)))
+            else
+                Sim.createTerrainWorld 0xD16D16UL
+
         state <- world.SoilState.Value
 
         let rig =
             argValue "--machine"
             |> Option.map Tuning.rigByName
-            |> Option.defaultValue Tuning.u17Rig
+            |> Option.defaultValue Tuning.tb216Rig
 
-        world.SpawnMachineRig(rig, Vector3(32.0f, 0.0f, 32.0f)) |> ignore
-        world.SeedRocks 48
+        let spawnAt =
+            if previewDir.IsSome then
+                Vector3(12.0f, 0.0f, 12.0f)
+            else
+                Vector3(32.0f, 0.0f, 32.0f)
+
+        world.SpawnMachineRig(rig, spawnAt) |> ignore
+
+        if previewDir.IsNone then
+            world.SeedRocks 48
         grains <- GrainPool(120_000, state)
         renderer <- new Renderer(gl, state)
         hud <- Hud(gl)
@@ -316,6 +350,27 @@ let main args =
 
         loadLatch <- f9
 
+        // M toggles the machine menu; 1/2/3 swap rigs.
+        let mKey = keyboard.IsKeyPressed Key.M
+
+        if mKey && not menuLatch then
+            menuOpen <- not menuOpen
+
+        menuLatch <- mKey
+
+        if menuOpen then
+            let pick =
+                if keyboard.IsKeyPressed Key.Number1 then Some Tuning.tb216Rig
+                elif keyboard.IsKeyPressed Key.Number2 then Some Tuning.u17Rig
+                elif keyboard.IsKeyPressed Key.Number3 then Some Tuning.cat320Rig
+                else None
+
+            match pick with
+            | Some rig ->
+                world.SwapMachine rig |> ignore
+                menuOpen <- false
+            | None -> ()
+
         // P toggles ISO/SAE (edge-latched, persisted).
         let pKey = keyboard.IsKeyPressed Key.P
 
@@ -333,7 +388,9 @@ let main args =
         patternToggleLatch <- pKey
 
         let machineInput =
-            if demoMode then
+            if menuOpen then
+                InputFrame.empty
+            elif demoMode then
                 // Scripted dig-swing-dump loop for demos and screenshots.
                 match (world.Tick / 110L) % 8L with
                 | 0L -> { InputFrame.empty with Bucket = -1.0f }
@@ -538,12 +595,13 @@ let main args =
 
         // HUD overlay.
         let uiScale = MathF.Max(float32 size.Y / 600.0f, 1.5f)
+        let showHud = previewDir.IsNone
         let white = Vector4(0.95f, 0.95f, 0.92f, 0.9f)
         let orange = Vector4(0.95f, 0.55f, 0.1f, 0.95f)
         let red = Vector4(0.95f, 0.2f, 0.15f, 0.95f)
         hud.Begin(size.X, size.Y)
 
-        match world.Machine with
+        match (if showHud then world.Machine else None) with
         | Some m ->
             let margin = 10.0f * uiScale
             let line = 11.0f * uiScale
@@ -588,41 +646,68 @@ let main args =
         | None -> ()
 
         // Small stat line under the tilt readout.
-        hud.Text(
+        if showHud then
+            hud.Text(
             10.0f * uiScale,
             10.0f * uiScale + 11.0f * uiScale * 8.2f,
             uiScale * 0.6f,
             Vector4(0.9f, 0.9f, 0.88f, 0.55f),
-            (let pattern = (if settings.ControlPattern = ControlPattern.Iso then "ISO" else "SAE")
-             $"%.0f{statFps} FPS  {pattern}")
-        )
+                (let pattern = (if settings.ControlPattern = ControlPattern.Iso then "ISO" else "SAE")
+                 $"%.0f{statFps} FPS  {pattern}")
+            )
 
-        // Control diagram: a translucent blocky excavator silhouette with
-        // the keys sitting on the parts they drive. No labels needed.
-        let u = uiScale
-        let ox = float32 size.X - 150.0f * u
-        let oy = float32 size.Y - 96.0f * u
-        hud.Solid(ox, oy, 150.0f * u, 86.0f * u, Vector4(0.05f, 0.05f, 0.06f, 0.30f))
-        let shape = Vector4(0.85f, 0.85f, 0.82f, 0.5f)
-        let trackShape = Vector4(0.6f, 0.6f, 0.58f, 0.5f)
-        let key = Vector4(1.0f, 1.0f, 1.0f, 0.92f)
-        // Separated parts so the profile reads: tracks, cab, boom out,
-        // stick down, bucket — with keys floating beside what they drive.
-        hud.Solid(ox + 16.0f * u, oy + 54.0f * u, 44.0f * u, 9.0f * u, trackShape)
-        hud.Solid(ox + 20.0f * u, oy + 30.0f * u, 22.0f * u, 22.0f * u, shape)
-        hud.Solid(ox + 48.0f * u, oy + 24.0f * u, 34.0f * u, 5.0f * u, shape)
-        hud.Solid(ox + 84.0f * u, oy + 30.0f * u, 5.0f * u, 24.0f * u, shape)
-        hud.Solid(ox + 74.0f * u, oy + 56.0f * u, 14.0f * u, 7.0f * u, shape)
-        hud.Text(ox + 6.0f * u, oy + 36.0f * u, u * 0.9f, key, "A")
-        hud.Text(ox + 44.0f * u, oy + 36.0f * u, u * 0.9f, key, "D")
-        hud.Text(ox + 60.0f * u, oy + 10.0f * u, u * 0.9f, key, "I")
-        hud.Text(ox + 60.0f * u, oy + 33.0f * u, u * 0.9f, key, "K")
-        hud.Text(ox + 94.0f * u, oy + 28.0f * u, u * 0.9f, key, "W")
-        hud.Text(ox + 94.0f * u, oy + 46.0f * u, u * 0.9f, key, "S")
-        hud.Text(ox + 64.0f * u, oy + 68.0f * u, u * 0.9f, key, "J")
-        hud.Text(ox + 92.0f * u, oy + 68.0f * u, u * 0.9f, key, "L")
-        hud.Text(ox + 16.0f * u, oy + 68.0f * u, u * 0.75f, key, "QE")
-        hud.Text(ox + 40.0f * u, oy + 68.0f * u, u * 0.75f, key, "ZC")
+        if showHud then
+            // Control diagram: a translucent blocky excavator silhouette with
+            // the keys sitting on the parts they drive. No labels needed.
+            let u = uiScale
+            let ox = float32 size.X - 150.0f * u
+            let oy = float32 size.Y - 96.0f * u
+            hud.Solid(ox, oy, 150.0f * u, 86.0f * u, Vector4(0.05f, 0.05f, 0.06f, 0.30f))
+            let shape = Vector4(0.85f, 0.85f, 0.82f, 0.5f)
+            let trackShape = Vector4(0.6f, 0.6f, 0.58f, 0.5f)
+            let key = Vector4(1.0f, 1.0f, 1.0f, 0.92f)
+            // Separated parts so the profile reads: tracks, cab, boom out,
+            // stick down, bucket — with keys floating beside what they drive.
+            hud.Solid(ox + 16.0f * u, oy + 54.0f * u, 44.0f * u, 9.0f * u, trackShape)
+            hud.Solid(ox + 20.0f * u, oy + 30.0f * u, 22.0f * u, 22.0f * u, shape)
+            hud.Solid(ox + 48.0f * u, oy + 24.0f * u, 34.0f * u, 5.0f * u, shape)
+            hud.Solid(ox + 84.0f * u, oy + 30.0f * u, 5.0f * u, 24.0f * u, shape)
+            hud.Solid(ox + 74.0f * u, oy + 56.0f * u, 14.0f * u, 7.0f * u, shape)
+            hud.Text(ox + 6.0f * u, oy + 36.0f * u, u * 0.9f, key, "A")
+            hud.Text(ox + 44.0f * u, oy + 36.0f * u, u * 0.9f, key, "D")
+            hud.Text(ox + 60.0f * u, oy + 10.0f * u, u * 0.9f, key, "I")
+            hud.Text(ox + 60.0f * u, oy + 33.0f * u, u * 0.9f, key, "K")
+            hud.Text(ox + 94.0f * u, oy + 28.0f * u, u * 0.9f, key, "W")
+            hud.Text(ox + 94.0f * u, oy + 46.0f * u, u * 0.9f, key, "S")
+            hud.Text(ox + 64.0f * u, oy + 68.0f * u, u * 0.9f, key, "J")
+            hud.Text(ox + 92.0f * u, oy + 68.0f * u, u * 0.9f, key, "L")
+            hud.Text(ox + 16.0f * u, oy + 68.0f * u, u * 0.75f, key, "QE")
+            hud.Text(ox + 40.0f * u, oy + 68.0f * u, u * 0.75f, key, "ZC")
+
+        if menuOpen then
+            let cx = float32 size.X * 0.5f - 90.0f * uiScale
+            let cy = float32 size.Y * 0.5f - 50.0f * uiScale
+            hud.Solid(cx, cy, 180.0f * uiScale, 92.0f * uiScale, Vector4(0.04f, 0.04f, 0.05f, 0.82f))
+            hud.Text(cx + 12.0f * uiScale, cy + 10.0f * uiScale, uiScale, white, "MACHINE")
+
+            let current =
+                match world.Machine with
+                | Some m -> m.Rig.Spec.Name
+                | None -> ""
+
+            let entry (index: int) (label: string) (name: string) =
+                let color =
+                    if name = current then
+                        orange
+                    else
+                        Vector4(0.85f, 0.85f, 0.85f, 0.85f)
+
+                hud.Text(cx + 12.0f * uiScale, cy + (26.0f + float32 index * 16.0f) * uiScale, uiScale * 0.9f, color, label)
+
+            entry 0 "1  TAKEUCHI TB216" "TB216"
+            entry 1 "2  KUBOTA U17" "U17"
+            entry 2 "3  CAT 320" "Cat 320"
+            hud.Text(cx + 12.0f * uiScale, cy + 78.0f * uiScale, uiScale * 0.65f, Vector4(0.7f, 0.7f, 0.7f, 0.7f), "M CLOSE")
 
         hud.End()
 
@@ -636,6 +721,31 @@ let main args =
             statTime <- 0.0
 
         frameCount <- frameCount + 1L
+
+        match previewDir with
+        | Some directory ->
+            let machineCenter =
+                match world.Machine with
+                | Some m ->
+                    world.Physics.Simulation.Bodies.[m.Chassis].Pose.Position
+                    + Vector3(0.6f, 0.3f, 0.0f)
+                | None -> Vector3.Zero
+
+            let angleIndex = int ((frameCount - 60L) / 20L)
+
+            if frameCount >= 60L && angleIndex < previewAngles.Length then
+                let _, offset = previewAngles.[angleIndex]
+                cameraPosition <- machineCenter + offset
+                cameraForward <- Vector3.Normalize(machineCenter - cameraPosition)
+
+                // Shoot at the END of each angle's window (state settled).
+                if (frameCount - 60L) % 20L = 19L then
+                    let name, _ = previewAngles.[angleIndex]
+                    IO.Directory.CreateDirectory directory |> ignore
+                    screenshot gl size.X size.Y (IO.Path.Combine(directory, name + ".bmp"))
+            elif angleIndex >= previewAngles.Length then
+                window.Close()
+        | None -> ()
 
         let tickReached =
             match shotTick with

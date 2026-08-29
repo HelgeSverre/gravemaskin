@@ -49,41 +49,51 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
     let bucket =
         Bepu.addDynamicOpenBucket simulation physics.Pool bucketCenter bucketSize massBucket
 
+    // Every constraint is tracked so a machine can be despawned cleanly.
+    let constraintHandles = ResizeArray<ConstraintHandle>(16)
+
     // Machine parts don't self-collide (collision group; RagdollDemo pattern).
     do
         for handle in [| chassis; house; boom; stick; bucket |] do
             physics.SetCollisionGroup(handle, 1)
 
     let swingMotor =
-        Bepu.addHinge simulation chassis house Vector3.UnitY (swingPivot - chassisCenter) (swingPivot - houseCenter)
-        |> ignore
+        constraintHandles.Add(
+            Bepu.addHinge simulation chassis house Vector3.UnitY (swingPivot - chassisCenter) (swingPivot - houseCenter)
+        )
 
         Bepu.addAngularMotor simulation chassis house Vector3.UnitY
 
     let boomMotor =
-        Bepu.addHinge simulation house boom Vector3.UnitZ (boomPivot - houseCenter) (boomPivot - boomCenter)
-        |> ignore
+        constraintHandles.Add(
+            Bepu.addHinge simulation house boom Vector3.UnitZ (boomPivot - houseCenter) (boomPivot - boomCenter)
+        )
 
-        Bepu.addTwistLimit simulation house boom rig.BoomJoint.MinAngle rig.BoomJoint.MaxAngle
-        |> ignore
+        constraintHandles.Add(
+            Bepu.addTwistLimit simulation house boom rig.BoomJoint.MinAngle rig.BoomJoint.MaxAngle
+        )
 
         Bepu.addAngularMotor simulation house boom Vector3.UnitZ
 
     let stickMotor =
-        Bepu.addHinge simulation boom stick Vector3.UnitZ (stickPivot - boomCenter) (stickPivot - stickCenter)
-        |> ignore
+        constraintHandles.Add(
+            Bepu.addHinge simulation boom stick Vector3.UnitZ (stickPivot - boomCenter) (stickPivot - stickCenter)
+        )
 
-        Bepu.addTwistLimit simulation boom stick rig.StickJoint.MinAngle rig.StickJoint.MaxAngle
-        |> ignore
+        constraintHandles.Add(
+            Bepu.addTwistLimit simulation boom stick rig.StickJoint.MinAngle rig.StickJoint.MaxAngle
+        )
 
         Bepu.addAngularMotor simulation boom stick Vector3.UnitZ
 
     let bucketMotor =
-        Bepu.addHinge simulation stick bucket Vector3.UnitZ (bucketPivot - stickCenter) (bucketPivot - bucketCenter)
-        |> ignore
+        constraintHandles.Add(
+            Bepu.addHinge simulation stick bucket Vector3.UnitZ (bucketPivot - stickCenter) (bucketPivot - bucketCenter)
+        )
 
-        Bepu.addTwistLimit simulation stick bucket rig.BucketJoint.MinAngle rig.BucketJoint.MaxAngle
-        |> ignore
+        constraintHandles.Add(
+            Bepu.addTwistLimit simulation stick bucket rig.BucketJoint.MinAngle rig.BucketJoint.MaxAngle
+        )
 
         Bepu.addAngularMotor simulation stick bucket Vector3.UnitZ
 
@@ -410,11 +420,27 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
 
                     chassisRef.ApplyImpulse(lateral * (lateralForce * dt), offsetWorld)
 
+    /// Remove every constraint and body this machine owns. Callers must
+    /// fold the payload back into the world FIRST (mass ledger).
+    member _.Despawn() =
+        for handle in constraintHandles do
+            simulation.Solver.Remove handle
+
+        for motor in motors do
+            simulation.Solver.Remove motor
+
+        simulation.Solver.Remove swingMotor
+
+        for body in partsScratch do
+            physics.SetCollisionGroup(body, 0)
+            simulation.Bodies.Remove body
+
     /// Write the five part poses into the snapshot.
     member this.FillSnapshot(snapshot: RenderSnapshot) =
         let parts = partsScratch
         snapshot.MachinePartCount <- parts.Length
         snapshot.MachineScale <- scale
+        snapshot.MachineName <- rig.Spec.Name
         snapshot.PayloadKg <- float32 (Array.sum bucketLoad)
         snapshot.PayloadCapacityKg <- float32 rig.BucketCapacityKg
         // Dominant material colors the heap.

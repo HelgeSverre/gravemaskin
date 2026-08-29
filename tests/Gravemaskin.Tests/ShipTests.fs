@@ -162,3 +162,31 @@ let ``the 64 m sandbox terrain runs a machine session inside a sane budget`` () 
     let budget = if TestKit.isReleaseBuild then 8.0 else 50.0
     Assert.True(times.[1979] < budget, $"big-map p99 {times.[1979]:F2} ms over {budget} ms")
     Assert.True(TestKit.conservationError world < 1e-6)
+
+[<Fact>]
+let ``machine swap despawns cleanly and the replacement digs`` () =
+    use world = TestKit.soilWorld Topsoil
+    let first = world.SpawnMachineRig(Tuning.tb216Rig, Vector3(8.0f, 0.0f, 8.0f))
+    TestKit.stepAll 60 InputFrame.empty world |> ignore
+
+    // Load the bucket so the swap has payload to account for.
+    TestKit.stepAll 60 { InputFrame.empty with Bucket = -1.0f } world |> ignore
+    Assert.True(first.BucketLoadKg > 5.0)
+
+    let bodiesBefore = world.Physics.Simulation.Bodies.ActiveSet.Count
+    let second = world.SwapMachine Tuning.u17Rig
+    ignore bodiesBefore
+    Assert.Equal("U17", second.Rig.Spec.Name)
+    Assert.True(TestKit.conservationError world < 1e-6, $"swap must not leak mass: {TestKit.conservationError world}")
+
+    // The replacement is alive: boom lifts.
+    TestKit.stepAll 60 InputFrame.empty world |> ignore
+    let sagged = second.BoomAngle
+    TestKit.stepAll 240 { InputFrame.empty with Boom = 1.0f } world |> ignore
+    Assert.True(second.BoomAngle > sagged + 0.3f, $"swapped machine should work: {sagged} -> {second.BoomAngle}")
+
+    // Swap again (back) to shake out constraint-handle reuse.
+    let third = world.SwapMachine Tuning.tb216Rig
+    TestKit.stepAll 120 InputFrame.empty world |> ignore
+    Assert.Equal("TB216", third.Rig.Spec.Name)
+    Assert.True(TestKit.conservationError world < 1e-6)

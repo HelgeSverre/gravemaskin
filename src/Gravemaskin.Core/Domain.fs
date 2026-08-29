@@ -173,6 +173,7 @@ type RenderSnapshot(capacity: int) =
     member val MachinePositions = Array.zeroCreate<Vector3> 8
     member val MachineOrientations = Array.zeroCreate<Quaternion> 8
     member val MachineScale = 1.0f with get, set
+    member val MachineName = "" with get, set
     member val PayloadKg = 0.0f with get, set
     member val PayloadCapacityKg = 1.0f with get, set
     member val PayloadMaterial = 0uy with get, set

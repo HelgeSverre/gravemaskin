@@ -92,6 +92,7 @@ void main()
     /// container; this is presentation.)
     let bucketTilt = 0.785f
 
+    /// Generic (U17/Cat-style) model.
     let machineBoxes =
         [| 0, Vector3(0.0f, -0.1f, -0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f), 0.0f // track L
            0, Vector3(0.0f, -0.1f, 0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f), 0.0f // track R
@@ -125,6 +126,74 @@ void main()
            4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), Vector3(0.22f, 0.22f, 0.24f), bucketTilt // bucket shell top
            4, Vector3(0.0f, 0.0f, -0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f), bucketTilt // bucket side
            4, Vector3(0.0f, 0.0f, 0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f), bucketTilt |] // bucket side
+
+
+    /// Takeuchi TB216, modeled against docs/takeuchi-tb216/images: white
+    /// body, red skirt band and corner accents, tall glazed cab on the
+    /// left, low engine cover rear-right, rounded white counterweight,
+    /// WHITE gooseneck boom on a front swing post, dozer blade, dark steel
+    /// bucket. Iterate with `just preview`.
+    let tb216Boxes =
+        let white = Vector3(0.88f, 0.87f, 0.83f)
+        let whiteDim = Vector3(0.8f, 0.79f, 0.76f)
+        let red = Vector3(0.68f, 0.07f, 0.09f)
+        let glass = Vector3(0.07f, 0.09f, 0.12f)
+        let dark = Vector3(0.1f, 0.1f, 0.11f)
+        let steel = Vector3(0.42f, 0.42f, 0.45f)
+        let grey = Vector3(0.3f, 0.3f, 0.32f)
+
+        [| // undercarriage + tracks
+           0, Vector3(0.0f, -0.1f, -0.55f), Vector3(1.75f, 0.38f, 0.34f), dark, 0.0f
+           0, Vector3(0.0f, -0.1f, 0.55f), Vector3(1.75f, 0.38f, 0.34f), dark, 0.0f
+           0, Vector3(-0.82f, -0.1f, -0.55f), Vector3(0.26f, 0.44f, 0.36f), dark * 0.8f, 0.0f
+           0, Vector3(-0.82f, -0.1f, 0.55f), Vector3(0.26f, 0.44f, 0.36f), dark * 0.8f, 0.0f
+           0, Vector3(0.82f, -0.1f, -0.55f), Vector3(0.26f, 0.44f, 0.36f), dark * 0.8f, 0.0f
+           0, Vector3(0.82f, -0.1f, 0.55f), Vector3(0.26f, 0.44f, 0.36f), dark * 0.8f, 0.0f
+           0, Vector3(0.0f, 0.06f, 0.0f), Vector3(1.25f, 0.3f, 0.95f), grey, 0.0f
+           // dozer blade on the arm side
+           0, Vector3(0.95f, -0.08f, -0.3f), Vector3(0.5f, 0.09f, 0.09f), grey, 0.1f
+           0, Vector3(0.95f, -0.08f, 0.3f), Vector3(0.5f, 0.09f, 0.09f), grey, 0.1f
+           0, Vector3(1.22f, -0.06f, 0.0f), Vector3(0.09f, 0.34f, 1.3f), steel * 0.75f, -0.08f
+           // house: red skirt, white bodywork
+           1, Vector3(0.0f, -0.14f, 0.0f), Vector3(1.34f, 0.2f, 1.04f), red, 0.0f
+           1, Vector3(0.55f, 0.04f, 0.3f), Vector3(0.16f, 0.26f, 0.34f), red, 0.0f
+           // cab (left side), glass front/side, white roof
+           1, Vector3(0.14f, 0.34f, -0.18f), Vector3(0.88f, 1.08f, 0.62f), white, 0.0f
+           1, Vector3(0.56f, 0.38f, -0.18f), Vector3(0.05f, 0.85f, 0.54f), glass, 0.0f
+           1, Vector3(0.14f, 0.42f, -0.47f), Vector3(0.76f, 0.78f, 0.05f), glass, 0.0f
+           1, Vector3(0.14f, 0.9f, -0.18f), Vector3(0.98f, 0.12f, 0.7f), white, 0.0f
+           // engine cover right-rear, vent, counterweight
+           1, Vector3(-0.18f, 0.08f, 0.3f), Vector3(0.85f, 0.66f, 0.42f), white, 0.0f
+           1, Vector3(-0.18f, 0.14f, 0.5f), Vector3(0.55f, 0.34f, 0.03f), grey, 0.0f
+           1, Vector3(-0.58f, 0.04f, 0.0f), Vector3(0.38f, 0.75f, 0.96f), white, 0.0f
+           1, Vector3(-0.73f, 0.16f, 0.0f), Vector3(0.2f, 0.5f, 0.8f), whiteDim, 0.0f
+           1, Vector3(-0.64f, -0.24f, -0.42f), Vector3(0.26f, 0.26f, 0.15f), red, 0.0f
+           1, Vector3(-0.64f, -0.24f, 0.42f), Vector3(0.26f, 0.26f, 0.15f), red, 0.0f
+           // swing post
+           1, Vector3(0.56f, -0.08f, 0.0f), Vector3(0.3f, 0.36f, 0.28f), whiteDim, 0.0f
+           // boom: WHITE gooseneck
+           2, Vector3(-0.5f, 0.08f, 0.0f), Vector3(1.12f, 0.26f, 0.18f), white, 0.32f
+           2, Vector3(0.48f, 0.13f, 0.0f), Vector3(1.15f, 0.2f, 0.16f), white, -0.24f
+           2, Vector3(-0.05f, 0.28f, 0.0f), Vector3(0.36f, 0.18f, 0.19f), white, 0.04f
+           2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.12f, 0.26f, 0.22f), steel, 0.0f
+           // stick: white, tapered
+           3, Vector3(-0.2f, 0.0f, 0.0f), Vector3(0.75f, 0.17f, 0.14f), white, 0.0f
+           3, Vector3(0.33f, 0.0f, 0.0f), Vector3(0.5f, 0.13f, 0.12f), whiteDim, -0.06f
+           3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.1f, 0.2f, 0.17f), steel, 0.0f
+           // bucket: dark steel, existing tilt convention
+           4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), steel, 0.0f
+           4, Vector3(0.3f, -0.2f, -0.2f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
+           4, Vector3(0.3f, -0.2f, -0.067f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
+           4, Vector3(0.3f, -0.2f, 0.067f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
+           4, Vector3(0.3f, -0.2f, 0.2f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
+           4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), grey * 0.8f, bucketTilt
+           4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), grey * 0.8f, bucketTilt
+           4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), grey * 0.9f, bucketTilt
+           4, Vector3(0.0f, 0.0f, -0.27f), Vector3(0.5f, 0.4f, 0.06f), grey * 0.7f, bucketTilt
+           4, Vector3(0.0f, 0.0f, 0.27f), Vector3(0.5f, 0.4f, 0.06f), grey * 0.7f, bucketTilt |]
+
+    let boxesFor (name: string) =
+        if name = "TB216" then tb216Boxes else machineBoxes
 
     // Shared index buffer: same grid topology for every tile.
     let tileIndexCount = SoilConfig.TileSize * SubRes * SoilConfig.TileSize * SubRes * 6
@@ -580,7 +649,7 @@ void main()
             GlUtil.uniform3f gl solidProgram "cameraPosition" cameraPosition
             gl.BindVertexArray cubeVao
 
-            for (part, offset, size, color, localRotation) in machineBoxes do
+            for (part, offset, size, color, localRotation) in boxesFor current.MachineName do
                 if part < current.MachinePartCount then
                     let offset = offset * current.MachineScale
                     let size = size * current.MachineScale
@@ -667,7 +736,7 @@ void main()
 
                     // Barrel covers the parent 55%; the rod runs the rest.
                     let barrelEnd = Vector3.Lerp(a, b, 0.55f)
-                    drawBeam a barrelEnd (0.09f * scaleFactor) (Vector3(0.55f, 0.35f, 0.1f))
+                    drawBeam a barrelEnd (0.09f * scaleFactor) (Vector3(0.16f, 0.16f, 0.18f))
                     drawBeam barrelEnd b (0.045f * scaleFactor) (Vector3(0.75f, 0.76f, 0.78f))
 
         // Clumps are no longer drawn as balls: each renders as a cluster of

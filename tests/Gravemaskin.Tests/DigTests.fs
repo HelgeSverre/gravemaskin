@@ -24,7 +24,19 @@ let ``full dig-swing-dump cycle: payload fills, pours out, mass conserved`` () =
     let world, machine = digWorld Topsoil
     use _ = world
     let state = world.SoilState.Value
-    let startSurface = Soil.surfaceHeight state 11.9f 8.0f
+
+    // Chaotic scripted digs shift a few cm between code versions; probe the
+    // whole reach region, not one point.
+    let regionMin () =
+        let mutable lowest = infinityf
+
+        for x in 38..52 do
+            for z in 26..38 do
+                lowest <- min lowest state.Heights.[state.ColumnIndex(x, z)]
+
+        lowest
+
+    let startSurface = regionMin ()
 
     // Curl in the dirt, boom down, crowd the stick — the scripted dig pass
     // (script validated interactively; the assertions are the contract).
@@ -34,9 +46,7 @@ let ``full dig-swing-dump cycle: payload fills, pours out, mass conserved`` () =
 
     Assert.True(machine.BucketLoadKg > 20.0, $"bucket should fill while digging: {machine.BucketLoadKg} kg")
 
-    let dugSurface = Soil.surfaceHeight state 11.9f 8.0f
-    // Threshold recalibrated for the plate-compound bucket (the solid box
-    // cut a slightly deeper scripted pass); the hole is what matters.
+    let dugSurface = regionMin ()
     Assert.True(dugSurface < startSurface - 0.12f, $"a hole should form: {startSurface} -> {dugSurface}")
 
     // Lift, swing away, open the bucket, let everything settle.

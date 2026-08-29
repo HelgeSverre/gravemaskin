@@ -108,3 +108,8 @@ install: _sdk
 uninstall:
     rm -rf /Applications/Gravemaskin.app
     @echo "Removed /Applications/Gravemaskin.app"
+
+# Render machine-model previews from fixed angles (model fidelity loop).
+[group('tools')]
+preview machine="tb216" dir=".build/preview": _sdk
+    {{ dotnet }} run --project {{ client }} -- --preview {{ dir }} --machine {{ machine }}

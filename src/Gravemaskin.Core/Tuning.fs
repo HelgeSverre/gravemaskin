@@ -225,8 +225,25 @@ module Tuning =
           DumpAngle = -0.35f
           DumpRatePerTick = 25.0 }
 
+    /// Takeuchi TB216: 1,795 kg, 16.2 kN bucket breakout, 2.39 m dig depth.
+    /// Same class as the U17 reference layout; the bucket bore is scaled so
+    /// the published breakout emerges (16.2/15.2 ⇒ bore ×1.033).
+    let tb216Rig =
+        { u17Rig with
+            Spec =
+                { u17 with
+                    Name = "TB216"
+                    OperatingMass = 1795.0f<kg>
+                    BucketBreakout = 16.2f<kN>
+                    DigDepth = 2.39f<m>
+                    Reach = 4.0f<m> }
+            BucketJoint = { u17BucketJoint with Bore = 0.0568f }
+            Masses = 900.0f, 555.0f, 190.0f, 95.0f, 55.0f }
+
     let rigByName (name: string) =
-        if name.Contains "320" then cat320Rig else u17Rig
+        if name.Contains "320" then cat320Rig
+        elif name.Contains "U17" || name.Contains "u17" then u17Rig
+        else tb216Rig
 
     /// FEE calibration knobs (see Excavator/Fee.fs — folded N-factors).
     /// Expect hand-tuning; that is their job.
