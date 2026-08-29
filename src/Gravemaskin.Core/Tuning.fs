@@ -137,8 +137,9 @@ module Tuning =
     let u17SwingMaxVel = 0.95f
     let u17SwingQMax = 10.4f
 
-    /// Track drive: velocity-servo per side, tractive cap ≈ μN per track.
-    let u17TrackMaxForce = 6000.0f
+    /// Track drive: velocity-servo per side. Cap ≈ half the machine's real
+    /// drawbar pull (mini drawbar ≈ 0.8× weight ⇒ ~13.5 kN total).
+    let u17TrackMaxForce = 7000.0f
     let u17TrackMaxSpeed = 1.18f // 4.25 km/h high range
     let u17TrackQMax = 8.0f
     /// Proportional gain: force ramps in over ~a few tenths of m/s of slip.

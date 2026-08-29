@@ -39,15 +39,27 @@ module Bepu =
                 =
                 true
 
-            member _.ConfigureContactManifold<'TManifold
+            member this.ConfigureContactManifold<'TManifold
                 when 'TManifold: unmanaged and 'TManifold: struct and 'TManifold :> IContactManifold<'TManifold>>
                 (
                     _workerIndex: int,
-                    _pair: CollidablePair,
+                    pair: CollidablePair,
                     _manifold: byref<'TManifold>,
                     pairMaterial: byref<PairMaterialProperties>
                 ) =
-                pairMaterial.FrictionCoefficient <- 1.0f
+                // Machine parts (group 1) get low-friction ground contact:
+                // tractive effort is injected by the track model, so contact
+                // friction on the hull only adds plow drag — with μ=1.0 the
+                // chassis wedged on every terrain facet and crawled at
+                // 0.06 m/s.
+                let groups = this.Groups
+
+                let isMachine (c: CollidableReference) =
+                    c.Mobility <> CollidableMobility.Static && groups.[c.BodyHandle.Value] = 1
+
+                pairMaterial.FrictionCoefficient <-
+                    if isMachine pair.A || isMachine pair.B then 0.45f else 1.0f
+
                 pairMaterial.MaximumRecoveryVelocity <- 2.0f
                 pairMaterial.SpringSettings <- SpringSettings(30.0f, 1.0f)
                 true

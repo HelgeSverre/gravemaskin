@@ -82,7 +82,7 @@ check: lint build test smoke
 # Release-build perf gate: the strict tick-budget numbers.
 [group('test')]
 perf: _sdk
-    {{ dotnet }} test {{ tests }} -c Release --nologo --filter "FullyQualifiedName~budget|FullyQualifiedName~allocates"
+    {{ dotnet }} test {{ tests }} -c Release --nologo --filter "FullyQualifiedName~budget|FullyQualifiedName~allocates|FullyQualifiedName~steady-state"
 
 # Build+install .app (macOS, dev, current arch only).
 [group('build')]

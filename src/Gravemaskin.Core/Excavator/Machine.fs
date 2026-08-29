@@ -395,12 +395,18 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
                     let impulse = forwardFlat * (force * dt)
                     chassisRef.ApplyImpulse(impulse, offsetWorld)
 
-                    // Lateral slip damping at the same point: tracks grip
-                    // sideways much harder than they roll forward.
+                    // Lateral slip damping at the same point. Capped at HALF
+                    // the tractive limit: this models skid resistance, and
+                    // at full strength it locked rotation — a pivot turn IS
+                    // deliberate lateral skidding at both tracks.
                     let lateralSpeed = Vector3.Dot(pointVelocity, lateral)
 
                     let lateralForce =
-                        Math.Clamp(-lateralSpeed * rig.TrackGain, -rig.TrackMaxForce, rig.TrackMaxForce)
+                        Math.Clamp(
+                            -lateralSpeed * rig.TrackGain,
+                            -rig.TrackMaxForce * 0.5f,
+                            rig.TrackMaxForce * 0.5f
+                        )
 
                     chassisRef.ApplyImpulse(lateral * (lateralForce * dt), offsetWorld)
 

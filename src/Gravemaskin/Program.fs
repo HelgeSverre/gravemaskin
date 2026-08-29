@@ -172,11 +172,11 @@ let main args =
     let mutable cameraForward = Vector3(0.0f, -0.4f, -0.9f)
     let brushRadius = 0.45f
 
-    // Stats for the title bar (the Phase 2 "HUD").
     let frameWatch = Stopwatch.StartNew()
     let mutable frameCount = 0L
     let mutable statFrames = 0
     let mutable statTime = 0.0
+    let mutable statFps = 0.0f
 
     window.add_Load (fun () ->
         gl <- GL.GetApi window
@@ -587,31 +587,51 @@ let main args =
                 hud.Text(margin, margin + line * 7.2f, uiScale, red, "STALL")
         | None -> ()
 
-        let hint =
-            if flyMode then
-                "FLY  WASD MOVE  LMB DIG  G DUMP  F1 OPERATE"
-            else
-                let pattern = if settings.ControlPattern = ControlPattern.Iso then "ISO" else "SAE"
-                $"{pattern}  AD SWING  WS STICK  IK BOOM  JL BUCKET  QE ZC TRACKS  P PATTERN  F1 FLY"
+        // Small stat line under the tilt readout.
+        hud.Text(
+            10.0f * uiScale,
+            10.0f * uiScale + 11.0f * uiScale * 8.2f,
+            uiScale * 0.6f,
+            Vector4(0.9f, 0.9f, 0.88f, 0.55f),
+            (let pattern = (if settings.ControlPattern = ControlPattern.Iso then "ISO" else "SAE")
+             $"%.0f{statFps} FPS  {pattern}")
+        )
 
-        hud.Text(10.0f * uiScale, float32 size.Y - 12.0f * uiScale, uiScale * 0.7f, white, hint)
+        // Control diagram: a translucent blocky excavator silhouette with
+        // the keys sitting on the parts they drive. No labels needed.
+        let u = uiScale
+        let ox = float32 size.X - 150.0f * u
+        let oy = float32 size.Y - 96.0f * u
+        hud.Solid(ox, oy, 150.0f * u, 86.0f * u, Vector4(0.05f, 0.05f, 0.06f, 0.30f))
+        let shape = Vector4(0.85f, 0.85f, 0.82f, 0.5f)
+        let trackShape = Vector4(0.6f, 0.6f, 0.58f, 0.5f)
+        let key = Vector4(1.0f, 1.0f, 1.0f, 0.92f)
+        // Separated parts so the profile reads: tracks, cab, boom out,
+        // stick down, bucket — with keys floating beside what they drive.
+        hud.Solid(ox + 16.0f * u, oy + 54.0f * u, 44.0f * u, 9.0f * u, trackShape)
+        hud.Solid(ox + 20.0f * u, oy + 30.0f * u, 22.0f * u, 22.0f * u, shape)
+        hud.Solid(ox + 48.0f * u, oy + 24.0f * u, 34.0f * u, 5.0f * u, shape)
+        hud.Solid(ox + 84.0f * u, oy + 30.0f * u, 5.0f * u, 24.0f * u, shape)
+        hud.Solid(ox + 74.0f * u, oy + 56.0f * u, 14.0f * u, 7.0f * u, shape)
+        hud.Text(ox + 6.0f * u, oy + 36.0f * u, u * 0.9f, key, "A")
+        hud.Text(ox + 44.0f * u, oy + 36.0f * u, u * 0.9f, key, "D")
+        hud.Text(ox + 60.0f * u, oy + 10.0f * u, u * 0.9f, key, "I")
+        hud.Text(ox + 60.0f * u, oy + 33.0f * u, u * 0.9f, key, "K")
+        hud.Text(ox + 94.0f * u, oy + 28.0f * u, u * 0.9f, key, "W")
+        hud.Text(ox + 94.0f * u, oy + 46.0f * u, u * 0.9f, key, "S")
+        hud.Text(ox + 64.0f * u, oy + 68.0f * u, u * 0.9f, key, "J")
+        hud.Text(ox + 92.0f * u, oy + 68.0f * u, u * 0.9f, key, "L")
+        hud.Text(ox + 16.0f * u, oy + 68.0f * u, u * 0.75f, key, "QE")
+        hud.Text(ox + 40.0f * u, oy + 68.0f * u, u * 0.75f, key, "ZC")
+
         hud.End()
 
-        // Title-bar stats (a real HUD arrives in Phase 5).
+        // Frame stats feed the HUD, not the title.
         statFrames <- statFrames + 1
         statTime <- statTime + elapsed
 
         if statTime >= 0.5 then
-            let fps = float statFrames / statTime
-
-            let payload =
-                match world.Machine with
-                | Some m -> $" · payload {m.BucketLoadKg:F0} kg" + (if m.StallActive then " · STALL" else "")
-                | None -> ""
-
-            window.Title <-
-                $"GRAVEMASKIN — {fps:F0} fps · clumps {world.Clumps.Count}{payload} · AD swing WS stick IK boom JL bucket QE/ZC tracks · F1 fly/brush"
-
+            statFps <- float32 statFrames / float32 statTime
             statFrames <- 0
             statTime <- 0.0
 

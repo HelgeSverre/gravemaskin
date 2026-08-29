@@ -114,6 +114,10 @@ void main()
         screenWidth <- float32 width
         screenHeight <- float32 height
 
+    /// A plain filled quad (no background) — building block for icons.
+    member _.Solid(x: float32, y: float32, width: float32, height: float32, color: Vector4) =
+        quad x y (x + width) (y + height) -1.0f 0.0f -1.0f 0.0f color
+
     member _.Bar(x: float32, y: float32, width: float32, height: float32, fraction: float32, color: Vector4) =
         quad x y (x + width) (y + height) -1.0f 0.0f -1.0f 0.0f (Vector4(0.0f, 0.0f, 0.0f, 0.35f))
         let filled = Math.Clamp(fraction, 0.0f, 1.0f) * width
