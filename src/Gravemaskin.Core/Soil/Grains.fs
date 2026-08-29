@@ -98,9 +98,9 @@ type GrainPool(capacity: int, state: SoilState) =
 
         // Grain size by material: sand fine, gravel chunky.
         let baseSize =
-            if props.FrictionAngle > 0.72f then 0.026f // gravel
-            elif props.Cohesion > 3.0f<kPa> then 0.019f // clay/turf: crumbs
-            else 0.013f // sands, topsoil
+            if props.FrictionAngle > 0.72f then 0.017f // gravel
+            elif props.Cohesion > 3.0f<kPa> then 0.013f // clay/turf: crumbs
+            else 0.009f // sands, topsoil
 
         for _ in 1..grains do
             let jitterVelocity =

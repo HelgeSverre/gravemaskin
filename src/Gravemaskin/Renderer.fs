@@ -22,8 +22,115 @@ type Renderer(gl: GL, state: SoilState) =
     let cornerVerts = SoilConfig.TileSize + 1
 
     let terrainProgram = GlUtil.program gl Shaders.terrainVertex Shaders.terrainFragment
+
+    /// Tileable per-material detail textures, generated at startup (values
+    /// centered on 0.5; the shader multiplies two octaves ×4). Layers match
+    /// Volume.byteOfMaterial: topsoil, drysand, wetsand, gravel, clay, grass.
+    let detailTextureArray =
+        let size = 256
+        let handle = gl.GenTexture()
+        gl.BindTexture(TextureTarget.Texture2DArray, handle)
+
+        gl.TexImage3D(
+            TextureTarget.Texture2DArray,
+            0,
+            int InternalFormat.Rgb8,
+            uint32 size,
+            uint32 size,
+            uint32 MaterialCount,
+            0,
+            PixelFormat.Rgb,
+            PixelType.UnsignedByte,
+            IntPtr.Zero.ToPointer()
+        )
+
+        let pixels = Array.zeroCreate<byte> (size * size * 3)
+
+        // Tileable value noise: blend the noise with itself shifted by one
+        // period, weighted across the tile.
+        let tileableNoise (seed: int) (frequency: float32) (x: int) (y: int) =
+            let fx = float32 x / float32 size
+            let fy = float32 y / float32 size
+            let sample px py = Noise.value2 seed (Vector2(px * frequency, py * frequency))
+            let a = sample fx fy
+            let b = sample (fx - 1.0f) fy
+            let c = sample fx (fy - 1.0f)
+            let d = sample (fx - 1.0f) (fy - 1.0f)
+            let ab = a + (b - a) * fx
+            let cd = c + (d - c) * fx
+            ab + (cd - ab) * fy
+
+        for layer in 0 .. MaterialCount - 1 do
+            for y in 0 .. size - 1 do
+                for x in 0 .. size - 1 do
+                    let fx = float32 x / float32 size
+                    let fy = float32 y / float32 size
+
+                    // Per-material pattern, brightness centered on ~0.5.
+                    let struct (r0, g0, b0) =
+                        match layer with
+                        | 1 // dry sand: fine ripples
+                        | 2 -> // wet sand: same ripples, damper
+                            let ripple =
+                                MathF.Sin((fy + tileableNoise 41 6.0f x y * 0.35f) * 62.83f) * 0.06f
+
+                            let speck = (tileableNoise 42 90.0f x y - 0.5f) * 0.12f
+                            let v = 0.5f + ripple + speck
+                            struct (v, v, v * 0.97f)
+                        | 3 -> // gravel: posterized stone blobs with dark gaps
+                            let blob = tileableNoise 43 26.0f x y
+                            let stone = MathF.Floor(blob * 6.0f) / 6.0f
+                            let gap = if MathF.Abs(blob * 6.0f - MathF.Round(blob * 6.0f)) < 0.08f then -0.16f else 0.0f
+                            let v = 0.42f + stone * 0.22f + gap
+                            struct (v, v, v)
+                        | 4 -> // clay: broad smooth smears
+                            let smear = tileableNoise 44 5.0f x y
+                            let v = 0.44f + smear * 0.16f
+                            struct (v, v * 0.98f, v * 0.94f)
+                        | 5 -> // grass: vertical blade streaks + patchiness
+                            let blades =
+                                (tileableNoise 45 120.0f x (y / 4) - 0.5f) * 0.22f
+
+                            let patch = (tileableNoise 46 7.0f x y - 0.5f) * 0.18f
+                            let v = 0.5f + blades + patch
+                            struct (v * 0.9f, v * 1.05f, v * 0.85f)
+                        | _ -> // topsoil: multi-octave speckle
+                            let coarse = (tileableNoise 47 14.0f x y - 0.5f) * 0.14f
+                            let fine = (tileableNoise 48 70.0f x y - 0.5f) * 0.14f
+                            let v = 0.5f + coarse + fine
+                            struct (v, v * 0.96f, v * 0.9f)
+
+                    let index = (y * size + x) * 3
+                    pixels.[index] <- byte (Math.Clamp(r0, 0.05f, 0.95f) * 255.0f)
+                    pixels.[index + 1] <- byte (Math.Clamp(g0, 0.05f, 0.95f) * 255.0f)
+                    pixels.[index + 2] <- byte (Math.Clamp(b0, 0.05f, 0.95f) * 255.0f)
+
+            do
+                use pointer = fixed pixels
+
+                gl.TexSubImage3D(
+                    TextureTarget.Texture2DArray,
+                    0,
+                    0,
+                    0,
+                    layer,
+                    uint32 size,
+                    uint32 size,
+                    1u,
+                    PixelFormat.Rgb,
+                    PixelType.UnsignedByte,
+                    NativeInterop.NativePtr.toVoidPtr pointer
+                )
+
+        gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, int TextureMinFilter.LinearMipmapLinear)
+        gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, int TextureMagFilter.Linear)
+        gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapS, int TextureWrapMode.Repeat)
+        gl.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureWrapT, int TextureWrapMode.Repeat)
+        gl.GenerateMipmap TextureTarget.Texture2DArray
+        handle
     let clodProgram = GlUtil.program gl Shaders.clodVertex Shaders.clodFragment
-    let solidProgram = GlUtil.program gl Shaders.solidVertex Shaders.clodFragment
+    let solidProgram = GlUtil.program gl Shaders.solidVertex Shaders.solidFragment
+    let blobProgram = GlUtil.program gl Shaders.blobVertex Shaders.blobFragment
     let grainProgram = GlUtil.program gl Shaders.grainVertex Shaders.clodFragment
 
     let skyProgram =
@@ -85,6 +192,70 @@ void main()
     let cubeVbo = gl.GenBuffer()
     let cubeIbo = gl.GenBuffer()
 
+    // 12-sided cylinder along local X (length 1, diameter 1): the round
+    // primitive that separates PS2 from Minecraft — hydraulics, wheels,
+    // pins, exhausts.
+    let cylinderVerts, cylinderIndices =
+        let sides = 12
+        let data = ResizeArray<float32>()
+        let indices = ResizeArray<uint32>()
+
+        let ring (x: float32) (asCap: bool) =
+            for i in 0 .. sides - 1 do
+                let angle = float32 i / float32 sides * MathF.PI * 2.0f
+                let y = MathF.Cos angle * 0.5f
+                let z = MathF.Sin angle * 0.5f
+                let normal = if asCap then Vector3((if x < 0.0f then -1.0f else 1.0f), 0.0f, 0.0f) else Vector3(0.0f, y, z) * 2.0f
+
+                for v in [| x; y; z; normal.X; normal.Y; normal.Z |] do
+                    data.Add v
+
+        ring -0.5f false
+        ring 0.5f false
+        ring -0.5f true
+        ring 0.5f true
+        // cap centers
+        data.AddRange [| -0.5f; 0.0f; 0.0f; -1.0f; 0.0f; 0.0f |]
+        data.AddRange [| 0.5f; 0.0f; 0.0f; 1.0f; 0.0f; 0.0f |]
+        let centerLeft = uint32 (sides * 4)
+        let centerRight = centerLeft + 1u
+
+        for i in 0 .. sides - 1 do
+            let j = (i + 1) % sides
+            // side quad
+            indices.AddRange [| uint32 i; uint32 (sides + i); uint32 j |]
+            indices.AddRange [| uint32 j; uint32 (sides + i); uint32 (sides + j) |]
+            // caps
+            indices.AddRange [| centerLeft; uint32 (2 * sides + j); uint32 (2 * sides + i) |]
+            indices.AddRange [| centerRight; uint32 (3 * sides + i); uint32 (3 * sides + j) |]
+
+        data.ToArray(), indices.ToArray()
+
+    let cylinderVao = gl.GenVertexArray()
+    let cylinderVbo = gl.GenBuffer()
+    let cylinderIbo = gl.GenBuffer()
+
+    // Unit disc in the XZ plane (for blob shadows).
+    let discVerts, discIndices =
+        let segments = 16
+        let data = ResizeArray<float32>()
+        data.AddRange [| 0.0f; 0.0f; 0.0f; 0.0f; 1.0f; 0.0f |]
+
+        for i in 0 .. segments - 1 do
+            let angle = float32 i / float32 segments * MathF.PI * 2.0f
+            data.AddRange [| MathF.Cos angle * 0.5f; 0.0f; MathF.Sin angle * 0.5f; 0.0f; 1.0f; 0.0f |]
+
+        let indices = ResizeArray<uint32>()
+
+        for i in 0 .. segments - 1 do
+            indices.AddRange [| 0u; uint32 (1 + (i + 1) % segments); uint32 (1 + i) |]
+
+        data.ToArray(), indices.ToArray()
+
+    let discVao = gl.GenVertexArray()
+    let discVbo = gl.GenBuffer()
+    let discIbo = gl.GenBuffer()
+
     /// Visual boxes per machine body part:
     /// (body index, local offset, size, color, local Z rotation).
     /// The bucket group is rotated +45°: mouth down-and-back at rest, up at
@@ -145,10 +316,6 @@ void main()
         [| // undercarriage + tracks
            0, Vector3(0.0f, -0.1f, -0.55f), Vector3(1.75f, 0.38f, 0.34f), dark, 0.0f
            0, Vector3(0.0f, -0.1f, 0.55f), Vector3(1.75f, 0.38f, 0.34f), dark, 0.0f
-           0, Vector3(-0.82f, -0.1f, -0.55f), Vector3(0.26f, 0.44f, 0.36f), dark * 0.8f, 0.0f
-           0, Vector3(-0.82f, -0.1f, 0.55f), Vector3(0.26f, 0.44f, 0.36f), dark * 0.8f, 0.0f
-           0, Vector3(0.82f, -0.1f, -0.55f), Vector3(0.26f, 0.44f, 0.36f), dark * 0.8f, 0.0f
-           0, Vector3(0.82f, -0.1f, 0.55f), Vector3(0.26f, 0.44f, 0.36f), dark * 0.8f, 0.0f
            0, Vector3(0.0f, 0.06f, 0.0f), Vector3(1.25f, 0.3f, 0.95f), grey, 0.0f
            // dozer blade on the arm side
            0, Vector3(0.95f, -0.08f, -0.3f), Vector3(0.5f, 0.09f, 0.09f), grey, 0.1f
@@ -175,13 +342,10 @@ void main()
            2, Vector3(-0.5f, 0.08f, 0.0f), Vector3(1.12f, 0.26f, 0.18f), white, 0.32f
            2, Vector3(0.48f, 0.13f, 0.0f), Vector3(1.15f, 0.2f, 0.16f), white, -0.24f
            2, Vector3(-0.05f, 0.28f, 0.0f), Vector3(0.36f, 0.18f, 0.19f), white, 0.04f
-           2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.12f, 0.26f, 0.22f), steel, 0.0f
            // stick: white, tapered
            3, Vector3(-0.2f, 0.0f, 0.0f), Vector3(0.75f, 0.17f, 0.14f), white, 0.0f
            3, Vector3(0.33f, 0.0f, 0.0f), Vector3(0.5f, 0.13f, 0.12f), whiteDim, -0.06f
-           3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.1f, 0.2f, 0.17f), steel, 0.0f
            // bucket: dark steel, existing tilt convention
-           4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), steel, 0.0f
            4, Vector3(0.3f, -0.2f, -0.2f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
            4, Vector3(0.3f, -0.2f, -0.067f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
            4, Vector3(0.3f, -0.2f, 0.067f), Vector3(0.14f, 0.06f, 0.05f), steel * 0.8f, bucketTilt
@@ -194,6 +358,32 @@ void main()
 
     let boxesFor (name: string) =
         if name = "TB216" then tb216Boxes else machineBoxes
+
+    /// Cylindrical detail parts: (body, offset, length, diameter, color, axis).
+    let tb216Cylinders =
+        let dark = Vector3(0.09f, 0.09f, 0.1f)
+        let steel = Vector3(0.45f, 0.45f, 0.48f)
+
+        [| // road wheels / idlers / sprockets (axis Z)
+           0, Vector3(-0.82f, -0.14f, -0.55f), 0.36f, 0.42f, dark, 2
+           0, Vector3(-0.82f, -0.14f, 0.55f), 0.36f, 0.42f, dark, 2
+           0, Vector3(0.82f, -0.14f, -0.55f), 0.36f, 0.42f, dark, 2
+           0, Vector3(0.82f, -0.14f, 0.55f), 0.36f, 0.42f, dark, 2
+           0, Vector3(-0.3f, -0.26f, -0.55f), 0.3f, 0.2f, dark, 2
+           0, Vector3(-0.3f, -0.26f, 0.55f), 0.3f, 0.2f, dark, 2
+           0, Vector3(0.3f, -0.26f, -0.55f), 0.3f, 0.2f, dark, 2
+           0, Vector3(0.3f, -0.26f, 0.55f), 0.3f, 0.2f, dark, 2
+           // exhaust stub (axis Y)
+           1, Vector3(-0.4f, 0.48f, 0.3f), 0.24f, 0.09f, dark, 1
+           // pivot pins (axis Z)
+           2, Vector3(-0.95f, 0.0f, 0.0f), 0.3f, 0.22f, steel, 2
+           3, Vector3(-0.55f, 0.0f, 0.0f), 0.24f, 0.18f, steel, 2
+           4, Vector3(-0.28f, 0.0f, 0.0f), 0.24f, 0.16f, steel, 2 |]
+
+    let genericCylinders: (int * Vector3 * float32 * float32 * Vector3 * int)[] = [||]
+
+    let cylindersFor (name: string) =
+        if name = "TB216" then tb216Cylinders else genericCylinders
 
     // Shared index buffer: same grid topology for every tile.
     let tileIndexCount = SoilConfig.TileSize * SubRes * SoilConfig.TileSize * SubRes * 6
@@ -222,8 +412,8 @@ void main()
     let tileVaos = Array.zeroCreate<uint32> tileCount
     let tileVbos = Array.zeroCreate<uint32> tileCount
     let sharedIbo = gl.GenBuffer()
-    // pos3 + normal3 + color3 interleaved.
-    let vertexFloats = 9
+    // pos3 + normal3 + color3 + material layer.
+    let vertexFloats = 10
     let vertexScratch = Array.zeroCreate<float32> (tileVerts * tileVerts * vertexFloats)
 
     // Unit icosphere (icosahedron subdivided once → 80 faces) for rocks,
@@ -360,6 +550,17 @@ void main()
         let rockTone = Vector3(0.42f, 0.38f, 0.33f)
         Vector3.Lerp(baseColor * loosen * darken, rockTone, rockiness)
 
+    let columnMaterial (x: int) (z: int) =
+        let config = state.Config
+        let cx = min x (config.CellsX - 1)
+        let cz = min z (config.CellsZ - 1)
+        let mutable y = config.CellsY - 1
+
+        while y > 0 && state.Occupancy.[state.Index(cx, y, cz)] = 0uy do
+            y <- y - 1
+
+        float32 state.Material.[state.Index(cx, y, cz)]
+
     let cornerHeight (x: int) (z: int) =
         let config = state.Config
         let mutable total = 0.0f
@@ -380,6 +581,7 @@ void main()
     // grid interpolates from (avoids re-scanning columns per subvertex).
     let cornerHeightScratch = Array.zeroCreate<float32> (cornerVerts * cornerVerts)
     let cornerColorScratch = Array.zeroCreate<Vector3> (cornerVerts * cornerVerts)
+    let cornerMaterialScratch = Array.zeroCreate<float32> (cornerVerts * cornerVerts)
 
     let rebuildTile (tile: int) =
         let config = state.Config
@@ -393,6 +595,7 @@ void main()
             for cx in 0 .. cornerVerts - 1 do
                 cornerHeightScratch.[cz * cornerVerts + cx] <- cornerHeight (x0 + cx) (z0 + cz)
                 cornerColorScratch.[cz * cornerVerts + cx] <- columnColor (x0 + cx) (z0 + cz)
+                cornerMaterialScratch.[cz * cornerVerts + cx] <- columnMaterial (x0 + cx) (z0 + cz)
 
         // Bilinear samplers over the corner grid, in sub-vertex coordinates.
         let inline heightAt (sx: float32) (sz: float32) =
@@ -461,6 +664,10 @@ void main()
                 let c11 = cornerColorScratch.[(iz + 1) * cornerVerts + ix + 1]
                 let color = Vector3.Lerp(Vector3.Lerp(c00, c10, tx), Vector3.Lerp(c01, c11, tx), tz) * ao
 
+                // Nearest corner's material picks the detail-texture layer.
+                let mx = if tx < 0.5f then ix else ix + 1
+                let mz = if tz < 0.5f then iz else iz + 1
+
                 vertexScratch.[i] <- worldX
                 vertexScratch.[i + 1] <- h
                 vertexScratch.[i + 2] <- worldZ
@@ -470,7 +677,8 @@ void main()
                 vertexScratch.[i + 6] <- color.X
                 vertexScratch.[i + 7] <- color.Y
                 vertexScratch.[i + 8] <- color.Z
-                i <- i + 9
+                vertexScratch.[i + 9] <- cornerMaterialScratch.[mz * cornerVerts + mx]
+                i <- i + 10
 
         gl.BindVertexArray tileVaos.[tile]
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, tileVbos.[tile])
@@ -498,6 +706,8 @@ void main()
             gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, stride, IntPtr(12).ToPointer())
             gl.EnableVertexAttribArray 2u
             gl.VertexAttribPointer(2u, 3, VertexAttribPointerType.Float, false, stride, IntPtr(24).ToPointer())
+            gl.EnableVertexAttribArray 3u
+            gl.VertexAttribPointer(3u, 1, VertexAttribPointerType.Float, false, stride, IntPtr(36).ToPointer())
             rebuildTile tile
 
         // Unit cube for machine parts.
@@ -510,6 +720,20 @@ void main()
         gl.VertexAttribPointer(0u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr.Zero.ToPointer())
         gl.EnableVertexAttribArray 1u
         gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
+
+        // Cylinder + disc meshes.
+        for (vao, vbo, ibo, verts, indices) in
+            [| cylinderVao, cylinderVbo, cylinderIbo, cylinderVerts, cylinderIndices
+               discVao, discVbo, discIbo, discVerts, discIndices |] do
+            gl.BindVertexArray vao
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo)
+            GlUtil.upload gl BufferTargetARB.ArrayBuffer verts verts.Length BufferUsageARB.StaticDraw
+            gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ibo)
+            GlUtil.upload gl BufferTargetARB.ElementArrayBuffer indices indices.Length BufferUsageARB.StaticDraw
+            gl.EnableVertexAttribArray 0u
+            gl.VertexAttribPointer(0u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr.Zero.ToPointer())
+            gl.EnableVertexAttribArray 1u
+            gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
 
         // Grain mesh + instance buffer.
         gl.BindVertexArray grainVao
@@ -635,10 +859,33 @@ void main()
         gl.UniformMatrix4(gl.GetUniformLocation(terrainProgram, "viewProjection"), 1u, false, &vp.M11)
         GlUtil.uniform3f gl terrainProgram "sunDirection" sun
         GlUtil.uniform3f gl terrainProgram "cameraPosition" cameraPosition
+        GlUtil.uniform1i gl terrainProgram "detailTextures" 0
+        gl.ActiveTexture TextureUnit.Texture0
+        gl.BindTexture(TextureTarget.Texture2DArray, detailTextureArray)
 
         for tile in 0 .. tileCount - 1 do
             gl.BindVertexArray tileVaos.[tile]
             gl.DrawElements(PrimitiveType.Triangles, uint32 tileIndexCount, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer())
+
+        // Blob shadow: grounds the machine (PS2-era trick, still works).
+        if current.MachinePartCount > 0 then
+            let chassisPosition = current.MachinePositions.[0]
+            let shadowY = 0.04f + Soil.surfaceHeight state chassisPosition.X chassisPosition.Z
+
+            let mutable shadowModel =
+                Matrix4x4.CreateScale(4.4f * current.MachineScale, 1.0f, 3.6f * current.MachineScale)
+                * Matrix4x4.CreateTranslation(chassisPosition.X, shadowY, chassisPosition.Z)
+
+            gl.Enable EnableCap.Blend
+            gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha)
+            gl.DepthMask false
+            gl.UseProgram blobProgram
+            gl.UniformMatrix4(gl.GetUniformLocation(blobProgram, "viewProjection"), 1u, false, &vp.M11)
+            gl.UniformMatrix4(gl.GetUniformLocation(blobProgram, "model"), 1u, false, &shadowModel.M11)
+            gl.BindVertexArray discVao
+            gl.DrawElements(PrimitiveType.Triangles, uint32 discIndices.Length, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer())
+            gl.DepthMask true
+            gl.Disable EnableCap.Blend
 
         // Machine parts: interpolate each body pose, then draw its visual
         // boxes with the solid shader.
@@ -688,10 +935,57 @@ void main()
                         IntPtr.Zero.ToPointer()
                     )
 
-        // Hydraulic cylinders: barrel (thick, parent side) + rod (thin).
+        // Cylindrical detail parts (wheels, pins, exhaust).
         if current.MachinePartCount > 0 then
             gl.UseProgram solidProgram
-            gl.BindVertexArray cubeVao
+            gl.BindVertexArray cylinderVao
+
+            for (part, offset, length, diameter, color, axis) in cylindersFor current.MachineName do
+                if part < current.MachinePartCount then
+                    let hasPrevious = part < previous.MachinePartCount
+
+                    let position =
+                        if hasPrevious then
+                            Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
+                        else
+                            current.MachinePositions.[part]
+
+                    let orientation =
+                        if hasPrevious then
+                            Quaternion.Slerp(previous.MachineOrientations.[part], current.MachineOrientations.[part], alpha)
+                        else
+                            current.MachineOrientations.[part]
+
+                    let axisRotation =
+                        match axis with
+                        | 1 -> Matrix4x4.CreateRotationZ(MathF.PI / 2.0f)
+                        | 2 -> Matrix4x4.CreateRotationY(MathF.PI / 2.0f)
+                        | _ -> Matrix4x4.Identity
+
+                    let scaleFactor = current.MachineScale
+
+                    let mutable model =
+                        Matrix4x4.CreateScale(length * scaleFactor, diameter * scaleFactor, diameter * scaleFactor)
+                        * axisRotation
+                        * Matrix4x4.CreateTranslation(offset * scaleFactor)
+                        * Matrix4x4.CreateFromQuaternion orientation
+                        * Matrix4x4.CreateTranslation position
+
+                    gl.UniformMatrix4(gl.GetUniformLocation(solidProgram, "model"), 1u, false, &model.M11)
+                    GlUtil.uniform3f gl solidProgram "solidColor" color
+
+                    gl.DrawElements(
+                        PrimitiveType.Triangles,
+                        uint32 cylinderIndices.Length,
+                        DrawElementsType.UnsignedInt,
+                        IntPtr.Zero.ToPointer()
+                    )
+
+        // Hydraulic cylinders: barrel (thick, parent side) + rod (thin) —
+        // drawn with the round mesh now.
+        if current.MachinePartCount > 0 then
+            gl.UseProgram solidProgram
+            gl.BindVertexArray cylinderVao
 
             let partPose (part: int) =
                 let hasPrevious = part < previous.MachinePartCount
@@ -717,7 +1011,7 @@ void main()
 
                 gl.DrawElements(
                     PrimitiveType.Triangles,
-                    uint32 cubeIndices.Length,
+                    uint32 cylinderIndices.Length,
                     DrawElementsType.UnsignedInt,
                     IntPtr.Zero.ToPointer()
                 )
@@ -828,9 +1122,9 @@ void main()
         for i in 0 .. grains.Count - 1 do
             let baseColor = materialColor grains.Materials.[i]
             let darken = 1.0f - 0.32f * float32 grains.Wetness.[i] / 255.0f
-            // Lighter than before: instanced spheres shade half-dark, so a
-            // neutral tint read as coffee beans against the lit ground.
-            let tint = 1.0f + hash01 i * 0.35f
+            // Moderate tint: the old 1.0–1.35 range blew light materials
+            // (gravel) out to white specks against the terrain.
+            let tint = 0.88f + hash01 i * 0.24f
 
             pushGrainMoving
                 grains.PositionsX.[i]
@@ -956,6 +1250,7 @@ void main()
                 gl.DeleteBuffer tileVbos.[tile]
 
             gl.DeleteBuffer sharedIbo
+            gl.DeleteTexture detailTextureArray
             gl.DeleteVertexArray cubeVao
             gl.DeleteBuffer cubeVbo
             gl.DeleteBuffer cubeIbo
@@ -967,4 +1262,11 @@ void main()
             gl.DeleteBuffer grainVbo
             gl.DeleteBuffer grainIbo
             gl.DeleteBuffer grainInstanceVbo
+            gl.DeleteVertexArray cylinderVao
+            gl.DeleteBuffer cylinderVbo
+            gl.DeleteBuffer cylinderIbo
+            gl.DeleteVertexArray discVao
+            gl.DeleteBuffer discVbo
+            gl.DeleteBuffer discIbo
+            gl.DeleteProgram blobProgram
             gl.DeleteVertexArray skyVao

@@ -280,7 +280,10 @@ let main args =
         lastMouse <- mouseNow
 
         let forward =
-            if flyMode then
+            if previewDir.IsSome then
+                // Preview mode owns the camera (set per-angle in the render loop).
+                cameraForward
+            elif flyMode then
                 Vector3(MathF.Cos yaw * MathF.Cos pitch, MathF.Sin pitch, MathF.Sin yaw * MathF.Cos pitch)
             else
                 // Orbit: camera placed on a sphere around the machine.

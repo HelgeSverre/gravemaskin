@@ -10,18 +10,21 @@ module Shaders =
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec3 normal;
 layout(location = 2) in vec3 color;
+layout(location = 3) in float materialLayer;
 
 uniform mat4 viewProjection;
 
 out vec3 vNormal;
 out vec3 vColor;
 out vec3 vWorld;
+out float vLayer;
 
 void main()
 {
     vNormal = normal;
     vColor = color;
     vWorld = position;
+    vLayer = materialLayer;
     gl_Position = viewProjection * vec4(position, 1.0);
 }
 """
@@ -31,17 +34,13 @@ void main()
 in vec3 vNormal;
 in vec3 vColor;
 in vec3 vWorld;
+in float vLayer;
 
 uniform vec3 sunDirection;
 uniform vec3 cameraPosition;
+uniform sampler2DArray detailTextures;
 
 out vec4 fragColor;
-
-// Cheap value noise so bare dirt doesn't read as a flat poster.
-float hash(vec2 p)
-{
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
 
 void main()
 {
@@ -49,10 +48,14 @@ void main()
     float sun = max(dot(n, sunDirection), 0.0);
     // Hemispheric ambient: sky-blue-grey from above, ground bounce below.
     vec3 ambient = mix(vec3(0.18, 0.16, 0.14), vec3(0.35, 0.37, 0.40), n.y * 0.5 + 0.5);
-    float grain = mix(0.93, 1.07, hash(floor(vWorld.xz * 8.0)))
-                * mix(0.94, 1.06, hash(floor(vWorld.xz * 37.0)))
-                * mix(0.97, 1.03, hash(floor(vWorld.xz * 131.0)));
-    vec3 lit = vColor * grain * (ambient + vec3(1.0, 0.96, 0.88) * sun * 0.9);
+
+    // Two scales of the per-material detail texture (tileable, generated at
+    // startup): close detail + a broader octave to break the repeat.
+    vec3 detailNear = texture(detailTextures, vec3(vWorld.xz * 0.9, vLayer)).rgb;
+    vec3 detailFar = texture(detailTextures, vec3(vWorld.xz * 0.13, vLayer)).rgb;
+    vec3 detail = detailNear * detailFar * 4.0;
+
+    vec3 lit = vColor * detail * (ambient + vec3(1.0, 0.96, 0.88) * sun * 0.9);
 
     // Distance fog toward an overcast horizon.
     float dist = length(vWorld - cameraPosition);
@@ -126,6 +129,63 @@ void main()
     vColor = instanceColor;
     vWorld = world;
     gl_Position = viewProjection * vec4(world, 1.0);
+}
+"""
+
+    /// Machine surfaces: matte base + a paint-like specular hint.
+    let solidFragment =
+        """#version 410 core
+in vec3 vNormal;
+in vec3 vColor;
+in vec3 vWorld;
+
+uniform vec3 sunDirection;
+uniform vec3 cameraPosition;
+
+out vec4 fragColor;
+
+void main()
+{
+    vec3 n = normalize(vNormal);
+    float sun = max(dot(n, sunDirection), 0.0);
+    vec3 ambient = mix(vec3(0.16, 0.14, 0.12), vec3(0.33, 0.35, 0.38), n.y * 0.5 + 0.5);
+    vec3 viewDirection = normalize(cameraPosition - vWorld);
+    float spec = pow(max(dot(reflect(-sunDirection, n), viewDirection), 0.0), 28.0) * 0.4;
+    vec3 lit = vColor * (ambient + vec3(1.0, 0.96, 0.88) * sun * 0.9) + vec3(spec);
+    float dist = length(vWorld - cameraPosition);
+    float fog = 1.0 - exp(-dist * 0.012);
+    fragColor = vec4(mix(lit, vec3(0.63, 0.66, 0.70), fog), 1.0);
+}
+"""
+
+    /// Ground-hugging blob shadow: a disc that fades radially.
+    let blobVertex =
+        """#version 410 core
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 normal;
+
+uniform mat4 viewProjection;
+uniform mat4 model;
+
+out vec2 vDisc;
+
+void main()
+{
+    vDisc = position.xz * 2.0;
+    gl_Position = viewProjection * (model * vec4(position, 1.0));
+}
+"""
+
+    let blobFragment =
+        """#version 410 core
+in vec2 vDisc;
+
+out vec4 fragColor;
+
+void main()
+{
+    float alpha = (1.0 - smoothstep(0.35, 1.0, length(vDisc))) * 0.42;
+    fragColor = vec4(0.02, 0.02, 0.03, alpha);
 }
 """
 

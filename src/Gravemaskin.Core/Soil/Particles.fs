@@ -14,13 +14,13 @@ module Clumps =
 
     /// Below this speed for SettleTicks consecutive ticks (or asleep), a
     /// clump banks back into the volume.
-    let SettleSpeedSq = 0.05f * 0.05f
+    let SettleSpeedSq = 0.09f * 0.09f
 
     [<Literal>]
-    let SettleTicks = 30
+    let SettleTicks = 18
 
-    let MinRadius = 0.08f
-    let MaxRadius = 0.22f
+    let MinRadius = 0.05f
+    let MaxRadius = 0.15f
 
 type ClumpPool() =
     let handles = Array.zeroCreate<BodyHandle> Clumps.MaxClumps
