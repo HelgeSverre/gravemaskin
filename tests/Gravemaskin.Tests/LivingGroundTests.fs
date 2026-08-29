@@ -66,7 +66,7 @@ let ``an over-tall clay wall eventually fails as wedges, conserving mass`` () =
     // Direct compaction-byte writes changed cell masses; re-baseline the
     // ledger so the collapse itself is what conservation judges.
     let baseline = Soil.massTotals state
-    Array.blit baseline 0 state.Ledger 0 5
+    Array.blit baseline 0 state.Ledger 0 Domain.MaterialCount
 
     Array.fill state.DirtySettle 0 state.DirtySettle.Length true
 

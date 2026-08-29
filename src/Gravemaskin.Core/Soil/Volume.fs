@@ -37,11 +37,11 @@ type SoilState(config: SoilConfig) =
     // Per-material mass ledger (kg, f64): volume mass + live clump mass +
     // unbanked residual must always equal this. Set at fill; carve/deposit are
     // ledger-neutral by construction. Asserted by tests.
-    let ledger = Array.zeroCreate<float> 5
+    let ledger = Array.zeroCreate<float> MaterialCount
     // Deposit quantization residual (< one occupancy unit per material):
     // occupancy bytes can't represent arbitrary masses, so the remainder
     // waits here and folds into the next deposit. Counted by conservation.
-    let unbanked = Array.zeroCreate<float> 5
+    let unbanked = Array.zeroCreate<float> MaterialCount
     // Dirty XZ tiles (TileSize² columns each): settle CA and collision
     // remesh each keep their own flags, processed in index order so the
     // budgeted work stays deterministic.
@@ -89,7 +89,8 @@ module Volume =
         | 1 -> DrySand
         | 2 -> WetSand
         | 3 -> Gravel
-        | _ -> Clay
+        | 4 -> Clay
+        | _ -> Grass
 
     let byteOfMaterial (value: SoilMaterial) : byte =
         match value with
@@ -98,6 +99,7 @@ module Volume =
         | WetSand -> 2uy
         | Gravel -> 3uy
         | Clay -> 4uy
+        | Grass -> 5uy
 
     /// Loose (freshly excavated) density: bank / (1 + swell).
     let looseDensity (props: SoilProperties) =
@@ -156,7 +158,7 @@ module Volume =
     /// Total volume mass per material by full scan (kg) — test/debug only.
     let scanMassByMaterial (state: SoilState) =
         let config = state.Config
-        let totals = Array.zeroCreate<float> 5
+        let totals = Array.zeroCreate<float> MaterialCount
 
         for i in 0 .. state.Occupancy.Length - 1 do
             let occ = state.Occupancy.[i]
@@ -313,7 +315,7 @@ module Volume =
                 refreshColumnHeight state x z
 
         let masses = scanMassByMaterial state
-        Array.blit masses 0 state.Ledger 0 5
+        Array.blit masses 0 state.Ledger 0 MaterialCount
 
     /// Fill the volume as flat bank-density terrain of one material up to
     /// `groundHeight` meters, and initialize heights + ledger.
@@ -333,4 +335,4 @@ module Volume =
                 refreshColumnHeight state x z
 
         let masses = scanMassByMaterial state
-        Array.blit masses 0 state.Ledger 0 5
+        Array.blit masses 0 state.Ledger 0 MaterialCount

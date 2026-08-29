@@ -102,7 +102,7 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
     let lastVelocity = Array.create 4 0.0f
     let lastCap = Array.create 4 -1.0f
     // Payload (kg per material) + inertia change-guard.
-    let bucketLoad = Array.zeroCreate<float> 5
+    let bucketLoad = Array.zeroCreate<float> MaterialCount
     let mutable lastInertiaMass = 0.0f
 
     let joints = [| rig.BoomJoint; rig.StickJoint; rig.BucketJoint |]
@@ -209,7 +209,7 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
             // Release the heaviest material first (close enough to pouring).
             let mutable best = 0
 
-            for i in 1..4 do
+            for i in 1 .. MaterialCount - 1 do
                 if bucketLoad.[i] > bucketLoad.[best] then
                     best <- i
 

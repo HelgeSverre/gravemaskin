@@ -137,7 +137,8 @@ type Renderer(gl: GL, state: SoilState) =
         | 1 -> Vector3(0.72f, 0.62f, 0.44f) // dry sand
         | 2 -> Vector3(0.52f, 0.44f, 0.32f) // wet sand
         | 3 -> Vector3(0.48f, 0.47f, 0.45f) // gravel
-        | _ -> Vector3(0.45f, 0.34f, 0.24f) // clay
+        | 4 -> Vector3(0.45f, 0.34f, 0.24f) // clay
+        | _ -> Vector3(0.28f, 0.42f, 0.16f) // grass
 
     let columnColor (x: int) (z: int) =
         let config = state.Config

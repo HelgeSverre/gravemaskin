@@ -50,6 +50,13 @@ module Tuning =
               Cohesion = 4.8f<kPa>
               FrictionAngle = deg 21.0f
               Swell = 0.30f }
+        | Grass ->
+            // Turf: topsoil bound by roots — noticeably more cohesive than
+            // bare topsoil, a bit lighter, swells the most when torn up.
+            { BankDensity = 1350.0f<kg/m^3>
+              Cohesion = 6.5f<kPa>
+              FrictionAngle = deg 38.0f
+              Swell = 0.30f }
 
     /// Kubota U17-class mini excavator. First playable machine: small forces
     /// are solver-friendly, and 15.2 kN breakout against 17 kN of weight

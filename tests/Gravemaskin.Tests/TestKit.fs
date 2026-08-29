@@ -49,7 +49,7 @@ module TestKit =
             // Payload in the bucket is mass in flight, not mass lost.
             match world.Machine with
             | Some m ->
-                for i in 0..4 do
+                for i in 0 .. Domain.MaterialCount - 1 do
                     totals.[i] <- totals.[i] + m.BucketLoad.[i]
             | None -> ()
             let mutable worst = 0.0

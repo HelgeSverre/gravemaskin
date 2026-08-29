@@ -18,7 +18,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
     // next Step. Never allocated per tick (the zero-alloc gate depends on it).
     let events = ResizeArray<GameEvent>(64)
     // Carve scratch (per-material kg) — reused every carve, never allocated.
-    let carveScratch = Array.zeroCreate<float> 5
+    let carveScratch = Array.zeroCreate<float> MaterialCount
 
     let soilState =
         match soil with
@@ -190,7 +190,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                 if removed > 0.0 then
                     events.Add DigStarted
 
-                    for materialIndex in 0..4 do
+                    for materialIndex in 0 .. MaterialCount - 1 do
                         if carveScratch.[materialIndex] > 0.0 then
                             let absorbed = m.TryAbsorb(carveScratch.[materialIndex], materialIndex)
                             let spill = carveScratch.[materialIndex] - absorbed
@@ -385,7 +385,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             // Fold the payload out onto the ground under the bucket.
             match machine with
             | Some m ->
-                for i in 0..4 do
+                for i in 0 .. MaterialCount - 1 do
                     if m.BucketLoad.[i] > 0.0 then
                         Soil.deposit state m.BucketTipPosition m.BucketLoad.[i] (Volume.materialOfByte (byte i))
                         m.BucketLoad.[i] <- 0.0
@@ -393,7 +393,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
             use stream = System.IO.File.Create path
             use writer = new System.IO.BinaryWriter(stream)
-            writer.Write "GRAV1"
+            writer.Write "GRAV2"
             writer.Write state.Config.CellSize
             writer.Write state.Config.CellsX
             writer.Write state.Config.CellsY
@@ -419,7 +419,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             writeCompressed state.Material
             writeCompressed state.Compaction
 
-            for i in 0..4 do
+            for i in 0 .. MaterialCount - 1 do
                 writer.Write state.Ledger.[i]
                 writer.Write state.Unbanked.[i]
 
@@ -561,7 +561,7 @@ module Sim =
         use stream = System.IO.File.OpenRead path
         use reader = new System.IO.BinaryReader(stream)
 
-        if reader.ReadString() <> "GRAV1" then
+        if reader.ReadString() <> "GRAV2" then
             failwith "not a Gravemaskin save"
 
         let config =
@@ -591,7 +591,7 @@ module Sim =
         readCompressed state.Material
         readCompressed state.Compaction
 
-        for i in 0..4 do
+        for i in 0 .. MaterialCount - 1 do
             state.Ledger.[i] <- reader.ReadDouble()
             state.Unbanked.[i] <- reader.ReadDouble()
 

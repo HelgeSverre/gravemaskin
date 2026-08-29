@@ -13,6 +13,12 @@ module Domain =
         | WetSand
         | Gravel
         | Clay
+        | Grass
+
+    /// Number of soil materials — sizes every per-material array (ledger,
+    /// unbanked, payload, carve scratch). Keep in sync with SoilMaterial.
+    [<Literal>]
+    let MaterialCount = 6
 
     /// Per-material physical description. Instances live in Tuning.soil.
     /// Struct: Tuning.soil is called in per-cell hot loops — a reference
