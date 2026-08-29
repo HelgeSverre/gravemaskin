@@ -118,3 +118,47 @@ let ``save → load round-trips terrain, ledger, machine, and rocks exactly`` ()
     finally
         if File.Exists path then
             File.Delete path
+
+[<Fact>]
+[<Trait("Category", "Integration")>]
+let ``the 64 m sandbox terrain runs a machine session inside a sane budget`` () =
+    use world = Sim.createTerrainWorld 0xD16D16UL
+    world.SpawnMachine(Vector3(32.0f, 0.0f, 32.0f)) |> ignore
+    world.SeedRocks 48
+    let state = world.SoilState.Value
+    Assert.Equal(256, state.Config.CellsX)
+
+    // The generator should have produced real variety.
+    let seen = Array.zeroCreate<bool> Domain.MaterialCount
+
+    for i in 0 .. state.Material.Length - 1 do
+        if state.Occupancy.[i] > 0uy then
+            seen.[int state.Material.[i]] <- true
+
+    Assert.True(seen.[int (Volume.byteOfMaterial Grass)], "grass should exist")
+    Assert.True(seen.[int (Volume.byteOfMaterial DrySand)], "sand should exist")
+    Assert.True(seen.[int (Volume.byteOfMaterial Gravel)], "gravel should exist")
+    Assert.True(seen.[int (Volume.byteOfMaterial Clay)], "clay strata should exist")
+
+    let watch = System.Diagnostics.Stopwatch()
+    let times = Array.zeroCreate<float> 2000
+
+    for tick in 0..1999 do
+        watch.Restart()
+
+        let frame =
+            match (tick / 120) % 3 with
+            | 0 -> { InputFrame.empty with Bucket = -0.8f; Boom = -0.4f }
+            | 1 -> { InputFrame.empty with Stick = -0.8f }
+            | _ ->
+                { InputFrame.empty with
+                    LeftTrack = 1.0f
+                    RightTrack = 0.8f }
+
+        world.Step frame |> ignore
+        times.[tick] <- watch.Elapsed.TotalMilliseconds
+
+    Array.sortInPlace times
+    let budget = if TestKit.isReleaseBuild then 8.0 else 50.0
+    Assert.True(times.[1979] < budget, $"big-map p99 {times.[1979]:F2} ms over {budget} ms")
+    Assert.True(TestKit.conservationError world < 1e-6)

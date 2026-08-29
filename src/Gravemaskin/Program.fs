@@ -154,7 +154,7 @@ let main args =
     // Cameras: orbit-follow (default, machine controls) and free fly (F1,
     // brush controls).
     let mutable flyMode = Environment.GetEnvironmentVariable "GRAV_FLY" = "1"
-    let mutable cameraPosition = Vector3(16.0f, 8.0f, 26.0f)
+    let mutable cameraPosition = Vector3(32.0f, 10.0f, 44.0f)
     let mutable yaw = -1.57f
     let mutable pitch = -0.45f
     let mutable orbitYaw = 2.5f
@@ -185,8 +185,8 @@ let main args =
             |> Option.map Tuning.rigByName
             |> Option.defaultValue Tuning.u17Rig
 
-        world.SpawnMachineRig(rig, Vector3(16.0f, 0.0f, 16.0f)) |> ignore
-        world.SeedRocks 24
+        world.SpawnMachineRig(rig, Vector3(32.0f, 0.0f, 32.0f)) |> ignore
+        world.SeedRocks 48
         renderer <- Renderer(gl, state)
         hud <- Hud(gl)
 

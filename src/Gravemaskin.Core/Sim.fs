@@ -580,9 +580,16 @@ module Sim =
     let createSoilWorld seed mat groundHeight =
         new World(seed, defaultThreadCount, Some(FlatSoil(defaultSoilConfig, mat, groundHeight)))
 
-    /// The sandbox: 32×32 m rolling terrain with strata and sand patches.
+    /// The sandbox: 64×64 m rolling terrain — grass meadows, sand and
+    /// gravel patches, wet lowlands over a water table, clay underneath.
+    let sandboxSoilConfig =
+        { CellSize = 0.25f
+          CellsX = 256
+          CellsY = 48
+          CellsZ = 256 }
+
     let createTerrainWorld seed =
-        new World(seed, defaultThreadCount, Some(TerrainSoil(defaultSoilConfig, int seed, 2.2f, 0.8f)))
+        new World(seed, defaultThreadCount, Some(TerrainSoil(sandboxSoilConfig, int seed, 3.2f, 1.6f)))
 
     /// Load a save written by World.Save. The arm respawns in its parked
     /// pose (poses of five constrained bodies aren't worth serializing);
