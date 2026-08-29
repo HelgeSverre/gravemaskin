@@ -95,7 +95,7 @@ module Domain =
         | DigStarted
         | HydraulicStall
         | TrackSlip
-        | SoilDumped of massKg: float32
+        | SoilDumped of massKg: float32 * materialByte: byte
         | WallCollapsed
         | RockStruck
         | TipWarning

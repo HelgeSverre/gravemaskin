@@ -80,6 +80,9 @@ let main args =
         |> Option.bind (fun i -> if i + 1 < args.Length then Some args.[i + 1] else None)
 
     let maxFrames = argValue "--frames" |> Option.map int
+    let shotTick = argValue "--shot-tick" |> Option.map int64
+    let demoMode = args |> Array.contains "--demo"
+
     let screenshotPath = argValue "--screenshot"
     let mutable settings = Settings.load ()
 
@@ -127,6 +130,7 @@ let main args =
     let mutable audio: AudioSystem option = None
     let mutable world = Unchecked.defaultof<World>
     let mutable state = Unchecked.defaultof<SoilState>
+    let mutable grains = Unchecked.defaultof<GrainPool>
     let mutable patternToggleLatch = false
     let mutable saveLatch = false
     let mutable loadLatch = false
@@ -159,7 +163,8 @@ let main args =
     let mutable pitch = -0.45f
     let mutable orbitYaw = 2.5f
     let mutable orbitPitch = 0.5f
-    let mutable orbitDistance = 9.0f
+    let mutable orbitDistance =
+        argValue "--zoom" |> Option.map float32 |> Option.defaultValue 9.0f
     let mutable lastMouse = Vector2.Zero
     let mutable mouseInitialized = false
     let mutable flyToggleLatch = false
@@ -187,6 +192,7 @@ let main args =
 
         world.SpawnMachineRig(rig, Vector3(32.0f, 0.0f, 32.0f)) |> ignore
         world.SeedRocks 48
+        grains <- GrainPool(45_000, state)
         renderer <- new Renderer(gl, state)
         hud <- Hud(gl)
 
@@ -301,6 +307,7 @@ let main args =
                 (world :> IDisposable).Dispose()
                 world <- loadedWorld
                 state <- world.SoilState.Value
+                grains <- GrainPool(45_000, state)
                 (renderer :> IDisposable).Dispose()
                 renderer <- new Renderer(gl, state)
                 world.SnapshotInto previous
@@ -326,7 +333,19 @@ let main args =
         patternToggleLatch <- pKey
 
         let machineInput =
-            if flyMode then
+            if demoMode then
+                // Scripted dig-swing-dump loop for demos and screenshots.
+                match (world.Tick / 110L) % 8L with
+                | 0L -> { InputFrame.empty with Bucket = -1.0f }
+                | 1L -> { InputFrame.empty with Boom = -1.0f }
+                | 2L ->
+                    { InputFrame.empty with
+                        Stick = -1.0f
+                        Bucket = -0.5f }
+                | 3L -> { InputFrame.empty with Boom = 1.0f }
+                | 4L -> { InputFrame.empty with Swing = 0.8f }
+                | _ -> { InputFrame.empty with Bucket = 1.0f } // long open: pour it all
+            elif flyMode then
                 InputFrame.empty
             else
                 let keyboardFrame =
@@ -420,11 +439,65 @@ let main args =
             | Some system -> system.Update(world.Machine, world.Events, float32 fixedStep)
             | None -> ()
 
+            // Grain emission: the sim says WHAT happened; the grain layer
+            // turns it into flying dirt.
+            match world.Machine with
+            | Some m ->
+                let tip = m.BucketTipPosition
+                let tipVelocity = m.CuttingEdgeVelocity
+                let struct (matByte, moistByte) = Soil.surfaceSample state tip.X tip.Z
+                let tipMaterial = Volume.materialOfByte matByte
+
+                for event in world.Events do
+                    match event with
+                    | SoilDumped(mass, dumpedMat) ->
+                        // A pouring stream: grains inherit the bucket edge's
+                        // motion and rain out of the opening.
+                        grains.SpawnBurst(
+                            tip + Vector3(0.0f, -0.05f, 0.0f),
+                            tipVelocity + Vector3(0.0f, -0.6f, 0.0f),
+                            0.35f,
+                            Volume.materialOfByte dumpedMat,
+                            moistByte,
+                            Math.Clamp(int (mass * 70.0f), 10, 200)
+                        )
+                    | DigStarted ->
+                        // Crumble off the cutting edge while carving.
+                        grains.SpawnBurst(tip, tipVelocity * 0.5f, 0.9f, tipMaterial, moistByte, 28)
+                    | WallCollapsed ->
+                        // The wedge clumps burst into clusters on their own;
+                        // add a dust breath at the machine's general area.
+                        ()
+                    | RockStruck -> grains.SpawnBurst(tip, Vector3(0.0f, 0.8f, 0.0f), 1.2f, Gravel, 0uy, 24)
+                    | _ -> ()
+
+                // Track spray while driving.
+                for side in 0..1 do
+                    if MathF.Abs(m.TrackAxis side) > 0.35f then
+                        let contact = m.TrackContactPoint side
+                        let ground = Soil.surfaceHeight state contact.X contact.Z
+
+                        if contact.Y - ground < 0.35f * m.Rig.Scale then
+                            let struct (trackMat, trackMoist) = Soil.surfaceSample state contact.X contact.Z
+
+                            grains.SpawnBurst(
+                                Vector3(contact.X, ground + 0.06f, contact.Z),
+                                Vector3(0.0f, 0.7f, 0.0f),
+                                0.8f,
+                                Volume.materialOfByte trackMat,
+                                trackMoist,
+                                2
+                            )
+            | None -> ()
+
             let swap = previous
             previous <- current
             current <- swap
             world.SnapshotInto current
-            accumulator <- accumulator - fixedStep)
+            accumulator <- accumulator - fixedStep
+
+        // The grain layer runs on wall-clock, outside the deterministic sim.
+        grains.Step(float32 elapsed))
 
     window.add_Render (fun elapsed ->
         let size = window.FramebufferSize
@@ -443,7 +516,7 @@ let main args =
 
         renderer.RebuildDirtyTiles 8
         let alpha = float32 (accumulator / fixedStep)
-        renderer.Draw(view * projection, cameraPosition, previous, current, alpha, brushHit, brushRadius)
+        renderer.Draw(view * projection, cameraPosition, previous, current, alpha, grains, brushHit, brushRadius)
 
         // HUD overlay.
         let uiScale = MathF.Max(float32 size.Y / 600.0f, 1.5f)
@@ -526,8 +599,13 @@ let main args =
 
         frameCount <- frameCount + 1L
 
+        let tickReached =
+            match shotTick with
+            | Some target -> world.Tick >= target
+            | None -> false
+
         match maxFrames with
-        | Some limit when frameCount >= int64 limit ->
+        | _ when tickReached ->
             match screenshotPath with
             | Some path ->
                 screenshot gl size.X size.Y path

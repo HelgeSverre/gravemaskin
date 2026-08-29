@@ -261,7 +261,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             // Pour the payload out of an open bucket.
             match m.DumpTick() with
             | ValueSome(released, materialIndex) ->
-                events.Add(SoilDumped(float32 released))
+                events.Add(SoilDumped(float32 released, byte materialIndex))
 
                 this.SpawnClump(
                     edge + Vector3(0.0f, -0.1f, 0.0f),

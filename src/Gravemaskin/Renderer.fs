@@ -138,8 +138,10 @@ void main()
     let vertexFloats = 9
     let vertexScratch = Array.zeroCreate<float32> (tileVerts * tileVerts * vertexFloats)
 
-    // Unit icosphere (icosahedron subdivided once → 80 faces) for clods.
-    let icoVerts, icoIndices =
+    // Unit icosphere (icosahedron subdivided once → 80 faces) for rocks,
+    // plus the raw 20-face icosahedron for grains (they're centimeters big —
+    // 20 triangles is plenty and 60k of them is already 1.2M tris).
+    let icoVerts, icoIndices, grainVerts, grainIndices =
         let t = (1.0f + MathF.Sqrt 5.0f) / 2.0f
 
         let raw =
@@ -200,7 +202,14 @@ void main()
             flat.[i * 3 + 1] <- vertices.[i].Y
             flat.[i * 3 + 2] <- vertices.[i].Z
 
-        flat, subdivided.ToArray()
+        let baseFlat = Array.zeroCreate<float32> (raw.Length * 3)
+
+        for i in 0 .. raw.Length - 1 do
+            baseFlat.[i * 3] <- raw.[i].X
+            baseFlat.[i * 3 + 1] <- raw.[i].Y
+            baseFlat.[i * 3 + 2] <- raw.[i].Z
+
+        flat, subdivided.ToArray(), baseFlat, faces
 
     let clodVao = gl.GenVertexArray()
     let clodVbo = gl.GenBuffer()
@@ -209,6 +218,21 @@ void main()
     // xyz + radius + rgb per instance.
     let instanceFloats = 7
     let instanceScratch = Array.zeroCreate<float32> ((Clumps.MaxClumps + 65) * instanceFloats)
+
+    // Grain layer: its own VAO over the 20-tri mesh; pool grains + clump
+    // clusters share one big instance buffer.
+    let grainVao = gl.GenVertexArray()
+    let grainVbo = gl.GenBuffer()
+    let grainIbo = gl.GenBuffer()
+    let grainInstanceVbo = gl.GenBuffer()
+    let grainScratch = Array.zeroCreate<float32> (90_000 * instanceFloats)
+
+    /// Deterministic per-(clump,grain) hash → [0,1).
+    let hash01 (seed: int) =
+        let mutable h = uint seed * 0x9E3779B9u
+        h <- (h ^^^ (h >>> 16)) * 0x7FEB352Du
+        h <- (h ^^^ (h >>> 15)) * 0x846CA68Bu
+        float32 (h ^^^ (h >>> 16)) / 4294967296.0f
 
     let materialColor (mat: byte) =
         match int mat with
@@ -374,6 +398,25 @@ void main()
         gl.EnableVertexAttribArray 1u
         gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
 
+        // Grain mesh + instance buffer.
+        gl.BindVertexArray grainVao
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, grainVbo)
+        GlUtil.upload gl BufferTargetARB.ArrayBuffer grainVerts grainVerts.Length BufferUsageARB.StaticDraw
+        gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, grainIbo)
+        GlUtil.upload gl BufferTargetARB.ElementArrayBuffer grainIndices grainIndices.Length BufferUsageARB.StaticDraw
+        gl.EnableVertexAttribArray 0u
+        gl.VertexAttribPointer(0u, 3, VertexAttribPointerType.Float, false, 12u, IntPtr.Zero.ToPointer())
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, grainInstanceVbo)
+
+        do
+            let instanceStride = uint32 (instanceFloats * 4)
+            gl.EnableVertexAttribArray 1u
+            gl.VertexAttribPointer(1u, 4, VertexAttribPointerType.Float, false, instanceStride, IntPtr.Zero.ToPointer())
+            gl.VertexAttribDivisor(1u, 1u)
+            gl.EnableVertexAttribArray 2u
+            gl.VertexAttribPointer(2u, 3, VertexAttribPointerType.Float, false, instanceStride, IntPtr(16).ToPointer())
+            gl.VertexAttribDivisor(2u, 1u)
+
         // Clod mesh + instance buffer.
         gl.BindVertexArray clodVao
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, clodVbo)
@@ -455,6 +498,7 @@ void main()
             previous: RenderSnapshot,
             current: RenderSnapshot,
             alpha: float32,
+            grains: GrainPool,
             brush: Vector3 voption,
             brushRadius: float32
         ) =
@@ -578,38 +622,9 @@ void main()
                     drawBeam a barrelEnd (0.09f * scaleFactor) (Vector3(0.55f, 0.35f, 0.1f))
                     drawBeam barrelEnd b (0.045f * scaleFactor) (Vector3(0.75f, 0.76f, 0.78f))
 
-        // Clumps: interpolate by matching handles (swap-removes reorder the
-        // pool, so index-matching would smear positions across clumps).
+        // Clumps are no longer drawn as balls: each renders as a cluster of
+        // grains (below). Their interpolated positions seed the clusters.
         let mutable instances = 0
-
-        for i in 0 .. current.Count - 1 do
-            let handle = current.Handles.[i]
-            let mutable px = current.X.[i]
-            let mutable py = current.Y.[i]
-            let mutable pz = current.Z.[i]
-
-            // Linear scan over previous handles: N ≤ 1500, fine.
-            let mutable j = 0
-
-            while j < previous.Count do
-                if previous.Handles.[j] = handle then
-                    px <- previous.X.[j] + (px - previous.X.[j]) * alpha
-                    py <- previous.Y.[j] + (py - previous.Y.[j]) * alpha
-                    pz <- previous.Z.[j] + (pz - previous.Z.[j]) * alpha
-                    j <- previous.Count
-                else
-                    j <- j + 1
-
-            let color = materialColor current.Materials.[i]
-            let baseIndex = instances * instanceFloats
-            instanceScratch.[baseIndex] <- px
-            instanceScratch.[baseIndex + 1] <- py
-            instanceScratch.[baseIndex + 2] <- pz
-            instanceScratch.[baseIndex + 3] <- current.Radius.[i]
-            instanceScratch.[baseIndex + 4] <- color.X
-            instanceScratch.[baseIndex + 5] <- color.Y
-            instanceScratch.[baseIndex + 6] <- color.Z
-            instances <- instances + 1
 
         // Rocks: same instancing, boulder grey.
         for i in 0 .. current.RockCount - 1 do
@@ -660,6 +675,84 @@ void main()
                 uint32 instances
             )
 
+        // ---- the grain layer: pool grains + clump clusters ----
+        let mutable grainInstances = 0
+        let grainCapacity = grainScratch.Length / instanceFloats
+
+        let inline pushGrain (x: float32) (y: float32) (z: float32) (size: float32) (color: Vector3) =
+            if grainInstances < grainCapacity then
+                let baseIndex = grainInstances * instanceFloats
+                grainScratch.[baseIndex] <- x
+                grainScratch.[baseIndex + 1] <- y
+                grainScratch.[baseIndex + 2] <- z
+                grainScratch.[baseIndex + 3] <- size
+                grainScratch.[baseIndex + 4] <- color.X
+                grainScratch.[baseIndex + 5] <- color.Y
+                grainScratch.[baseIndex + 6] <- color.Z
+                grainInstances <- grainInstances + 1
+
+        // Falling/resting grains from the pool, wet ones darker, each with a
+        // stable per-slot tint so a stream shimmers instead of banding.
+        for i in 0 .. grains.Count - 1 do
+            let baseColor = materialColor grains.Materials.[i]
+            let darken = 1.0f - 0.4f * float32 grains.Wetness.[i] / 255.0f
+            let tint = 0.82f + hash01 i * 0.36f
+            pushGrain grains.PositionsX.[i] grains.PositionsY.[i] grains.PositionsZ.[i] grains.Sizes.[i] (baseColor * darken * tint)
+
+        // Clump clusters: the mass carrier rendered as a wad of dirt.
+        for i in 0 .. current.Count - 1 do
+            let handle = current.Handles.[i]
+            let mutable px = current.X.[i]
+            let mutable py = current.Y.[i]
+            let mutable pz = current.Z.[i]
+            let mutable j = 0
+
+            while j < previous.Count do
+                if previous.Handles.[j] = handle then
+                    px <- previous.X.[j] + (px - previous.X.[j]) * alpha
+                    py <- previous.Y.[j] + (py - previous.Y.[j]) * alpha
+                    pz <- previous.Z.[j] + (pz - previous.Z.[j]) * alpha
+                    j <- previous.Count
+                else
+                    j <- j + 1
+
+            let radius = current.Radius.[i]
+            let baseColor = materialColor current.Materials.[i]
+            let pieces = Math.Clamp(int (radius * 55.0f), 6, 22)
+
+            for k in 0 .. pieces - 1 do
+                let seed = handle * 31 + k
+                let ox = (hash01 seed - 0.5f) * 1.5f * radius
+                let oy = (hash01 (seed + 101) - 0.5f) * 1.5f * radius
+                let oz = (hash01 (seed + 202) - 0.5f) * 1.5f * radius
+                let tint = 0.8f + hash01 (seed + 303) * 0.4f
+
+                pushGrain
+                    (px + ox)
+                    (py + oy)
+                    (pz + oz)
+                    (radius * (0.34f + hash01 (seed + 404) * 0.22f))
+                    (baseColor * tint)
+
+        if grainInstances > 0 then
+            gl.BindVertexArray grainVao
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, grainInstanceVbo)
+
+            GlUtil.upload
+                gl
+                BufferTargetARB.ArrayBuffer
+                grainScratch
+                (grainInstances * instanceFloats)
+                BufferUsageARB.StreamDraw
+
+            gl.DrawElementsInstanced(
+                PrimitiveType.Triangles,
+                uint32 grainIndices.Length,
+                DrawElementsType.UnsignedInt,
+                IntPtr.Zero.ToPointer(),
+                uint32 grainInstances
+            )
+
     /// Deletes every GL object this renderer owns — the F9 world reload
     /// creates a fresh renderer against the new soil state.
     interface IDisposable with
@@ -679,4 +772,8 @@ void main()
             gl.DeleteBuffer clodVbo
             gl.DeleteBuffer clodIbo
             gl.DeleteBuffer clodInstanceVbo
+            gl.DeleteVertexArray grainVao
+            gl.DeleteBuffer grainVbo
+            gl.DeleteBuffer grainIbo
+            gl.DeleteBuffer grainInstanceVbo
             gl.DeleteVertexArray skyVao

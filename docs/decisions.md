@@ -39,3 +39,15 @@ file (`Soil/Api.fs` defining the `Soil` module); the rule stands: `Sim.fs` and
   bilinearly smoothed heightfield with micro-noise and crevice AO, which
   delivers the smooth-dirt goal Surface Nets was for. The soil model remains
   2.5D columns; Surface Nets only earns its place if overhangs ever exist.
+
+## 2026-08-29 — The grain layer (falling-sand presentation)
+
+Loose-soil mass still rides in the capped BEPU clump bodies (ledger,
+determinism, machine interaction) — but clumps are no longer drawn as balls.
+Presentation is a falling-sand grain layer (Soil/Grains.fs): up to 45k small
+grains that fall, bounce, stack on a half-cell pile field, avalanche past
+repose, and re-mobilize when dug out from under; clumps render as grain
+clusters; pours/dig-crumble/track-spray emit from sim events. Per the SPEC's
+cosmetic contract the layer runs on wall-clock in the shell, carries zero
+mass, and stays outside the determinism hash — the Release sim gates are
+untouched by it.

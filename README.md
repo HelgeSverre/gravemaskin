@@ -51,17 +51,21 @@ compact it into ruts — the ground remembers.
 - Written in F#. Yes, the excavator game is functional-first. The dirt is the
   only thing allowed to be filthy.
 
-Also: trench walls that collapse when you cut them too steep in the wrong
-soil, tracks that compact loose spoil into ruts, dual-stick ISO/SAE controls
-(keyboard or gamepad), a diesel that labors when the pumps do, and a save
-format that accounts for every kilogram before it lets you quit.
+Also: dirt that behaves like dirt — tip the bucket and a granular stream
+pours out, stacks into a cone, and avalanches when the pile gets too steep;
+crumbs tumble off the cutting edge while you dig and spray from the tracks
+while you drive. Plus trench walls that collapse when you cut them too steep
+in the wrong soil, tracks that compact loose spoil into ruts, dual-stick
+ISO/SAE controls (keyboard or gamepad), a diesel that labors when the pumps
+do, and a save format that accounts for every kilogram before it lets you
+quit.
 
 ## Status
 
 A 64×64 m sandbox of grass meadows, sand, gravel, wet lowlands, and clay —
 playable and built in the open. macOS, Windows, and Linux.
 `just run` starts it; F1 toggles a free camera with a terrain-sculpting
-brush; F5/F9 save and load; `--machine 320` brings the big iron.
+brush; F5/F9 save and load; `--machine 320` brings the big iron; `--demo` runs a scripted dig loop.
 
 Developer things live in [`SPEC.md`](SPEC.md) (the phased plan) and
 [`docs/research/`](docs/research/) (the engineering research behind the soil

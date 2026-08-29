@@ -173,7 +173,7 @@ module Tuning =
           BucketTipRadius = 0.7f
           BucketCapacityKg = 70.0
           DumpAngle = -0.35f
-          DumpRatePerTick = 4.0 }
+          DumpRatePerTick = 1.2 }
 
     let cat320Rig =
         { Spec = cat320
@@ -222,7 +222,7 @@ module Tuning =
           BucketTipRadius = 1.5f
           BucketCapacityKg = 1600.0
           DumpAngle = -0.35f
-          DumpRatePerTick = 60.0 }
+          DumpRatePerTick = 25.0 }
 
     let rigByName (name: string) =
         if name.Contains "320" then cat320Rig else u17Rig
@@ -241,8 +241,9 @@ module Tuning =
     let CutMinSpeed = 0.12f
     /// U17 bucket payload ceiling (kg, loose) — ~0.05 m³ heaped.
     let BucketCapacityKg = 70.0
-    /// Dump release rate (kg per tick) once the bucket opens.
-    let DumpRatePerTick = 4.0
+    /// Dump release rate (kg per tick) once the bucket opens — ~1 s to
+    /// empty the U17's 70 kg, which reads as a pour instead of a dump-valve.
+    let DumpRatePerTick = 1.2
     /// Bucket angle above which the load pours out.
     let DumpAngle = -0.35f
 

@@ -46,6 +46,20 @@ module Soil =
 
         deposit state position mass mat
 
+    /// Material and moisture of the top cell at a world position — what the
+    /// grain layer samples to color and wet its spray.
+    let surfaceSample (state: SoilState) (x: float32) (z: float32) =
+        let config = state.Config
+        let cx = int (x / config.CellSize) |> max 0 |> min (config.CellsX - 1)
+        let cz = int (z / config.CellSize) |> max 0 |> min (config.CellsZ - 1)
+        let mutable y = config.CellsY - 1
+
+        while y > 0 && state.Occupancy.[state.Index(cx, y, cz)] = 0uy do
+            y <- y - 1
+
+        let index = state.Index(cx, y, cz)
+        struct (state.Material.[index], state.Moisture.[index])
+
     /// Bank a small mass directly into the quantization residual (used for
     /// amounts too small to be worth a clump — never dropped).
     let creditUnbanked (state: SoilState) (materialIndex: int) (mass: float) =
