@@ -44,6 +44,8 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
     let rockRadii = ResizeArray<float32>(64)
     let rockExposed = ResizeArray<bool>(64)
     let mutable rockStruckCooldown = 0
+    // Rotating column cursor for the budgeted moisture pass.
+    let mutable moistureCursor = 0
 
     let surfaceHeight (x: float32) (z: float32) =
         match soilState with
@@ -183,6 +185,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                 let index = state.Index(cx, cy, cz)
                 let matByte = state.Material.[index]
                 let compByte = state.Compaction.[index]
+                let moistByte = state.Moisture.[index]
                 let props = Tuning.soil (Volume.materialOfByte matByte)
 
                 let removed = Soil.carveSphere state edge Tuning.CutRadius carveScratch
@@ -218,7 +221,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                                 )
 
                 // FEE resistance opposing the cut direction.
-                let magnitude = Fee.resistance props compByte depth Tuning.CutWidth
+                let magnitude = Fee.resistance props compByte moistByte depth Tuning.CutWidth
                 targetForce <- -Vector3.Normalize edgeVelocity * magnitude
 
             feeForce <- Vector3.Lerp(feeForce, targetForce, Tuning.FeeSmoothing)
@@ -418,6 +421,8 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             writeCompressed state.Occupancy
             writeCompressed state.Material
             writeCompressed state.Compaction
+            writeCompressed state.Moisture
+            writer.Write state.WaterTableHeight
 
             for i in 0 .. MaterialCount - 1 do
                 writer.Write state.Ledger.[i]
@@ -482,6 +487,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                 this.SpawnClump(position, Vector3.Zero, mass, Volume.materialOfByte failure.MaterialByte)
 
             wallFailures.Clear()
+            moistureCursor <- Moisture.tick state state.WaterTableHeight moistureCursor
             this.CompactionTick state
             this.RockTick state
             physics.SwapDirtyTiles(state, World.MeshSwapBudget) |> ignore
@@ -590,6 +596,8 @@ module Sim =
         readCompressed state.Occupancy
         readCompressed state.Material
         readCompressed state.Compaction
+        readCompressed state.Moisture
+        state.WaterTableHeight <- reader.ReadSingle()
 
         for i in 0 .. MaterialCount - 1 do
             state.Ledger.[i] <- reader.ReadDouble()

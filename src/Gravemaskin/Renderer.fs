@@ -154,7 +154,9 @@ type Renderer(gl: GL, state: SoilState) =
         let index = state.Index(cx, y, cz)
         let baseColor = materialColor state.Material.[index]
         let loosen = 1.0f + (1.0f - float32 state.Compaction.[index] / 255.0f) * 0.25f
-        baseColor * loosen
+        // Wet ground reads darker — the classic soaked-soil cue.
+        let darken = 1.0f - 0.38f * float32 state.Moisture.[index] / 255.0f
+        baseColor * loosen * darken
 
     let cornerHeight (x: int) (z: int) =
         let config = state.Config

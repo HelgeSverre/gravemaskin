@@ -8,6 +8,7 @@
     <Compile Include="Bepu.fs" />
     <Compile Include="Soil/Volume.fs" />
     <Compile Include="Soil/Carve.fs" />
+    <Compile Include="Soil/Moisture.fs" />
     <Compile Include="Soil/Settle.fs" />
     <Compile Include="Soil/Particles.fs" />
     <Compile Include="Soil/Collision.fs" />

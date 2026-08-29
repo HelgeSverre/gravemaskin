@@ -18,6 +18,7 @@
     <Compile Include="TestKit.fs" />
     <Compile Include="CoreTests.fs" />
     <Compile Include="SoilTests.fs" />
+    <Compile Include="MoistureTests.fs" />
     <Compile Include="DeterminismTests.fs" />
     <Compile Include="SoilDeterminismTests.fs" />
     <Compile Include="MachineTests.fs" />

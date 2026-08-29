@@ -104,6 +104,8 @@ let ``save → load round-trips terrain, ledger, machine, and rocks exactly`` ()
         Assert.Equal<byte[]>(savedState.Occupancy, loadedState.Occupancy)
         Assert.Equal<byte[]>(savedState.Material, loadedState.Material)
         Assert.Equal<byte[]>(savedState.Compaction, loadedState.Compaction)
+        Assert.Equal<byte[]>(savedState.Moisture, loadedState.Moisture)
+        Assert.Equal(savedState.WaterTableHeight, loadedState.WaterTableHeight)
         Assert.Equal(savedHash, TestKit.hashSoil loaded)
         Assert.True(TestKit.conservationError loaded < 1e-6, "loaded world conserves against the saved ledger")
 

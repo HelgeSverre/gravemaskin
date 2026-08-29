@@ -34,13 +34,17 @@ module Settle =
     [<Literal>]
     let WedgeUnits = 510
 
-    /// h_crit ≈ 4c/γ (c in kPa → Pa; γ = ρg).
-    let criticalHeight (props: SoilProperties) =
-        if props.Cohesion <= 0.01f<kPa> then
+    /// h_crit ≈ 4c/γ (c in kPa → Pa; γ = ρg), with c at the cell's moisture.
+    let criticalHeightAt (props: SoilProperties) (moisture: byte) =
+        let c = Moisture.effectiveCohesion props moisture
+
+        if c <= 0.01f then
             0.0f
         else
-            4.0f * float32 props.Cohesion * 1000.0f
-            / (float32 props.BankDensity * 9.81f)
+            4.0f * c * 1000.0f / (float32 props.BankDensity * 9.81f)
+
+    /// Dry-cell convenience (kept for tests/back-compat).
+    let criticalHeight (props: SoilProperties) = criticalHeightAt props 0uy
 
     let private relaxPair
         (state: SoilState)
@@ -71,6 +75,7 @@ module Settle =
                 let index = state.Index(hiX, y, hiZ)
                 let matByte = state.Material.[index]
                 let compByte = state.Compaction.[index]
+                let moistByte = state.Moisture.[index]
                 let props = Tuning.soil (Volume.materialOfByte matByte)
 
                 if compByte < LooseThreshold then
@@ -87,12 +92,12 @@ module Settle =
                             if units > 0 then
                                 Volume.putUnits state loX loZ units takenMat takenComp
                                 state.MarkDirty(hiX, hiZ)
-                elif diff > criticalHeight props + config.CellSize then
+                elif diff > criticalHeightAt props moistByte + config.CellSize then
                     // Bank: the face is over-steep beyond what cohesion can
                     // hold. Cohesionless bank just flows; cohesive bank
                     // fails as a whole wedge → clumps (recorded, spawned by
                     // World).
-                    if criticalHeight props <= 0.0f then
+                    if criticalHeightAt props moistByte <= 0.0f then
                         let struct (units, takenMat, takenComp) =
                             Volume.takeTop state hiX hiZ (WedgeUnits / 2)
 

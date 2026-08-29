@@ -79,6 +79,7 @@ module TestKit =
                 mixByte state.Occupancy.[i]
                 mixByte state.Material.[i]
                 mixByte state.Compaction.[i]
+                mixByte state.Moisture.[i]
 
             for i in 0 .. state.Ledger.Length - 1 do
                 hash <- (hash ^^^ uint64 (System.BitConverter.DoubleToUInt64Bits state.Ledger.[i])) * 1099511628211UL

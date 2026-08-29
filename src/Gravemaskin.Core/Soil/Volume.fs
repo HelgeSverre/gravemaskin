@@ -32,6 +32,9 @@ type SoilState(config: SoilConfig) =
     let material = Array.zeroCreate<byte> cells
     // 255 = bank (undisturbed) density, 0 = freshly deposited loose.
     let compaction = Array.zeroCreate<byte> cells
+    // 0 dry … 255 saturated. A property of the ground (water-table model),
+    // not of transported soil — see Soil/Moisture.fs.
+    let moisture = Array.zeroCreate<byte> cells
     // Surface height per column (meters), maintained incrementally.
     let heights = Array.zeroCreate<float32> columns
     // Per-material mass ledger (kg, f64): volume mass + live clump mass +
@@ -57,7 +60,9 @@ type SoilState(config: SoilConfig) =
     member _.Occupancy = occupancy
     member _.Material = material
     member _.Compaction = compaction
+    member _.Moisture = moisture
     member _.Heights = heights
+    member val WaterTableHeight = 0.0f with get, set
     member _.Ledger = ledger
     member _.Unbanked = unbanked
     member _.TilesX = tilesX
@@ -287,6 +292,8 @@ module Volume =
     /// patches. Initializes heights + ledger.
     let fillTerrain (state: SoilState) (seed: int) (baseHeight: float32) (relief: float32) =
         let config = state.Config
+        // Groundwater sits under the low ground; lowlands dig up wet.
+        state.WaterTableHeight <- baseHeight - relief * 0.55f
 
         for z in 0 .. config.CellsZ - 1 do
             for x in 0 .. config.CellsX - 1 do
@@ -297,20 +304,29 @@ module Volume =
                     baseHeight + (Noise.fbm2 seed 4 point - 0.5f) * 2.0f * relief
 
                 let sandiness = Noise.fbm2 (seed + 7919) 3 (point * 0.6f)
+                let rockiness = Noise.fbm2 (seed + 4211) 3 (point * 0.8f)
+                let meadow = Noise.fbm2 (seed + 611) 3 (point * 0.35f)
                 let fullCells = max 1 (int (height / config.CellSize))
+                let nearWater = height < state.WaterTableHeight + 0.35f
 
                 for y in 0 .. min (fullCells - 1) (config.CellsY - 1) do
                     let index = state.Index(x, y, z)
                     let depthFromTop = float32 (fullCells - 1 - y) * config.CellSize
+                    let isSurface = y = min (fullCells - 1) (config.CellsY - 1)
 
                     let mat =
                         if depthFromTop > 0.6f then Clay
-                        elif sandiness > 0.62f then DrySand
+                        elif rockiness > 0.66f then Gravel
+                        elif sandiness > 0.62f then (if nearWater then WetSand else DrySand)
+                        elif isSurface && meadow > 0.5f && not nearWater then Grass
                         else Topsoil
 
                     state.Occupancy.[index] <- 255uy
                     state.Material.[index] <- byteOfMaterial mat
                     state.Compaction.[index] <- 255uy
+                    // Pre-wet up to the table so the world starts settled.
+                    if float32 y * config.CellSize < state.WaterTableHeight then
+                        state.Moisture.[index] <- 255uy
 
                 refreshColumnHeight state x z
 
