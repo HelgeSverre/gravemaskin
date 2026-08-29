@@ -20,7 +20,7 @@ module Clumps =
     let SettleTicks = 30
 
     let MinRadius = 0.08f
-    let MaxRadius = 0.35f
+    let MaxRadius = 0.22f
 
 type ClumpPool() =
     let handles = Array.zeroCreate<BodyHandle> Clumps.MaxClumps

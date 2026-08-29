@@ -138,8 +138,11 @@ type GrainPool(capacity: int, state: SoilState) =
 
                 let ground = this.GroundHeight(positionsX.[i], positionsZ.[i])
 
-                if positionsY.[i] <= ground + sizes.[i] then
-                    positionsY.[i] <- ground + sizes.[i]
+                // Rest partially EMBEDDED (0.35×size proud): grains sitting
+                // a full radius above the surface read as floating beads
+                // against the render mesh's micro-relief.
+                if positionsY.[i] <= ground + sizes.[i] * 0.35f then
+                    positionsY.[i] <- ground + sizes.[i] * 0.35f
 
                     let speedSq =
                         velocitiesX.[i] * velocitiesX.[i]
@@ -212,15 +215,15 @@ type GrainPool(capacity: int, state: SoilState) =
                     velocitiesY.[i] <- 0.0f
                     velocitiesZ.[i] <- -gradientZ * 2.0f
                     i <- i + 1
-                elif here < positionsY.[i] - sizes.[i] - 0.25f then
+                elif here < positionsY.[i] - sizes.[i] * 0.35f - 0.25f then
                     // Support truly vanished (dug out from under): fall.
                     restTimers.[i] <- -1.0f
                     i <- i + 1
-                elif here < positionsY.[i] - sizes.[i] - 0.005f then
+                elif here < positionsY.[i] - sizes.[i] * 0.35f - 0.005f then
                     // Support sank a little (pile decaying into the terrain
                     // mesh): follow it down QUIETLY and stay at rest — the
                     // old re-fall here made settled piles shimmer forever.
-                    positionsY.[i] <- here + sizes.[i]
+                    positionsY.[i] <- here + sizes.[i] * 0.35f
                     i <- i + 1
                 elif restTimers.[i] > 9.0f then
                     // Expired: the settled mass is in the terrain by now.

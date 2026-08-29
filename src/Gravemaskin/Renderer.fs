@@ -361,9 +361,12 @@ void main()
                 // Micro-relief: a whisper of value noise so smoothed dirt
                 // doesn't read as vinyl. Deterministic in world space, so
                 // tile borders agree.
+                // Kept small: the grain layer rests against the ANALYTIC
+                // surface, so render-only relief this large made settled
+                // grains read as floaters.
                 let micro =
-                    (Noise.value2 1913 (Vector2(worldX * 2.1f, worldZ * 2.1f)) - 0.5f) * 0.045f
-                    + (Noise.value2 7477 (Vector2(worldX * 9.3f, worldZ * 9.3f)) - 0.5f) * 0.018f
+                    (Noise.value2 1913 (Vector2(worldX * 2.1f, worldZ * 2.1f)) - 0.5f) * 0.02f
+                    + (Noise.value2 7477 (Vector2(worldX * 9.3f, worldZ * 9.3f)) - 0.5f) * 0.008f
 
                 let h = heightAt (float32 x) (float32 z) + micro
                 let step = 1.0f

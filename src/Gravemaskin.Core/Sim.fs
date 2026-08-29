@@ -502,11 +502,13 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             clumps.SettlePass(physics.Simulation, state)
             Soil.settleTick state wallFailures
 
-            // Cohesive wedge failures tumble off the face as clumps.
+            // Cohesive wedge failures tumble off the face as clumps — split
+            // into shovelful-sized pieces (one 40+ kg body rendered as a
+            // fist of floating lumps was the ugliest thing in the game).
             for failure in wallFailures do
                 events.Add WallCollapsed
 
-                let mass =
+                let mutable remaining =
                     float failure.Units
                     * Volume.massPerOccUnit state.Config failure.MaterialByte failure.CompactionByte
 
@@ -517,7 +519,18 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                         (float32 failure.Z + 0.5f) * state.Config.CellSize
                     )
 
-                this.SpawnClump(position, Vector3.Zero, mass, Volume.materialOfByte failure.MaterialByte)
+                while remaining > 0.0 do
+                    let piece = min remaining 9.0
+                    remaining <- remaining - piece
+
+                    let jitter =
+                        Vector3(
+                            (Rng.nextFloat32 &rng - 0.5f) * 0.3f,
+                            Rng.nextFloat32 &rng * 0.25f,
+                            (Rng.nextFloat32 &rng - 0.5f) * 0.3f
+                        )
+
+                    this.SpawnClump(position + jitter, Vector3.Zero, piece, Volume.materialOfByte failure.MaterialByte)
 
             wallFailures.Clear()
             moistureCursor <- Moisture.tick state state.WaterTableHeight moistureCursor
@@ -546,6 +559,10 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             snapshot.X.[i] <- position.X
             snapshot.Y.[i] <- position.Y
             snapshot.Z.[i] <- position.Z
+            let velocity = bodyRef.Velocity.Linear
+            snapshot.VelocityX.[i] <- velocity.X
+            snapshot.VelocityY.[i] <- velocity.Y
+            snapshot.VelocityZ.[i] <- velocity.Z
             snapshot.Materials.[i] <- clumps.Materials.[i]
 
             let props = Tuning.soil (Volume.materialOfByte clumps.Materials.[i])
