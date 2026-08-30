@@ -146,6 +146,8 @@ let main args =
     let mutable patternToggleLatch = false
     let mutable menuOpen = false
     let mutable menuLatch = false
+    let mutable helpOpen = previewDir.IsNone && not demoMode
+    let mutable helpLatch = false
     let mutable saveLatch = false
     let mutable loadLatch = false
 
@@ -361,6 +363,15 @@ let main args =
 
         menuLatch <- mKey
 
+        // H opens a compact control reference. Start with it visible so the
+        // simulator's two-stick controls are discoverable without a README.
+        let hKey = keyboard.IsKeyPressed Key.H
+
+        if hKey && not helpLatch then
+            helpOpen <- not helpOpen
+
+        helpLatch <- hKey
+
         if menuOpen then
             let pick =
                 if keyboard.IsKeyPressed Key.Number1 then Some Tuning.tb216Rig
@@ -391,7 +402,7 @@ let main args =
         patternToggleLatch <- pKey
 
         let machineInput =
-            if menuOpen then
+            if menuOpen || helpOpen then
                 InputFrame.empty
             elif demoMode then
                 // Scripted dig-swing-dump loop for demos and screenshots —
@@ -714,6 +725,44 @@ let main args =
             hud.Text(ox + 14.0f * u, oy + 76.0f * u, u * 0.75f, key, "QE")
             hud.Text(ox + 42.0f * u, oy + 76.0f * u, u * 0.75f, key, "ZC")
 
+            hud.Text(
+                float32 size.X - 43.0f * u,
+                10.0f * u,
+                u * 0.65f,
+                Vector4(0.95f, 0.95f, 0.92f, 0.65f),
+                "H HELP"
+            )
+
+        if helpOpen then
+            let u = uiScale
+            let panelWidth = 280.0f * u
+            let panelHeight = 204.0f * u
+            let cx = (float32 size.X - panelWidth) * 0.5f
+            let cy = (float32 size.Y - panelHeight) * 0.5f
+            let muted = Vector4(0.78f, 0.80f, 0.80f, 0.82f)
+            let pattern = if settings.ControlPattern = ControlPattern.Iso then "ISO" else "SAE"
+            hud.Solid(cx, cy, panelWidth, panelHeight, Vector4(0.025f, 0.03f, 0.035f, 0.90f))
+            hud.Solid(cx, cy, 4.0f * u, panelHeight, orange)
+            hud.Text(cx + 14.0f * u, cy + 12.0f * u, u * 1.15f, white, "OPERATE THE MACHINE")
+            hud.Text(cx + 14.0f * u, cy + 32.0f * u, u * 0.65f, muted, $"{pattern} TWO STICK CONTROLS")
+
+            let helpLine row keys label =
+                let y = cy + (51.0f + float32 row * 14.0f) * u
+                hud.Text(cx + 14.0f * u, y, u * 0.78f, orange, keys)
+                hud.Text(cx + 76.0f * u, y, u * 0.78f, white, label)
+
+            helpLine 0 "A / D" "SWING LEFT / RIGHT"
+            helpLine 1 "W / S" "STICK OUT / IN"
+            helpLine 2 "I / K" "BOOM UP / DOWN"
+            helpLine 3 "J / L" "BUCKET CURL / DUMP"
+            helpLine 4 "Q / E" "LEFT TRACK"
+            helpLine 5 "Z / C" "RIGHT TRACK"
+            helpLine 6 "RMB" "ORBIT CAMERA"
+            helpLine 7 "WHEEL" "CAMERA DISTANCE"
+            hud.Text(cx + 14.0f * u, cy + 177.0f * u, u * 0.62f, muted, "F1 FREE CAMERA   M MACHINES   P ISO / SAE")
+            hud.Text(cx + 14.0f * u, cy + 189.0f * u, u * 0.62f, muted, "F5 SAVE   F9 LOAD")
+            hud.Text(cx + 217.0f * u, cy + 12.0f * u, u * 0.72f, orange, "H CLOSE")
+
         if menuOpen then
             let cx = float32 size.X * 0.5f - 90.0f * uiScale
             let cy = float32 size.Y * 0.5f - 50.0f * uiScale
@@ -777,15 +826,22 @@ let main args =
                 window.Close()
         | None -> ()
 
-        let tickReached =
-            match shotTick with
-            | Some target -> world.Tick >= target
-            | None -> false
+        let captureReached =
+            (match shotTick with
+             | Some target -> world.Tick >= target
+             | None -> false)
+            || (match maxFrames with
+                | Some target -> frameCount >= int64 target
+                | None -> false)
 
-        match maxFrames with
-        | _ when tickReached ->
+        if captureReached then
             match screenshotPath with
             | Some path ->
+                let directory = IO.Path.GetDirectoryName path
+
+                if not (String.IsNullOrEmpty directory) then
+                    IO.Directory.CreateDirectory directory |> ignore
+
                 screenshot gl size.X size.Y path
                 printfn $"screenshot written to {path}"
 
@@ -796,8 +852,7 @@ let main args =
                 | None -> ()
             | None -> ()
 
-            window.Close()
-        | _ -> ())
+            window.Close())
 
     window.add_Closing (fun () -> recordWriter |> Option.iter (fun writer -> writer.Dispose()))
 
