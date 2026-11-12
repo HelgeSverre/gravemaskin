@@ -60,6 +60,41 @@ type Renderer(gl: GL, state: SoilState) =
             let cd = c + (d - c) * fx
             ab + (cd - ab) * fy
 
+        // Tileable cellular (Worley) pattern: distance to the nearest and
+        // second-nearest of one jittered point per grid cell (the grid wraps
+        // at the tile edge), plus a per-cell shade. Pebbles and soil crumbs.
+        let pebbleCells = 20
+
+        let pebbles (x: int) (y: int) =
+            let px = float32 x / float32 size * float32 pebbleCells
+            let py = float32 y / float32 size * float32 pebbleCells
+            let cellX = int px
+            let cellY = int py
+            let mutable nearest = 10.0f
+            let mutable second = 10.0f
+            let mutable shade = 0.0f
+
+            for dy in -1 .. 1 do
+                for dx in -1 .. 1 do
+                    let cx = cellX + dx
+                    let cy = cellY + dy
+                    let wx = float32 (((cx % pebbleCells) + pebbleCells) % pebbleCells)
+                    let wy = float32 (((cy % pebbleCells) + pebbleCells) % pebbleCells)
+                    let jx = Noise.value2 51 (Vector2(wx, wy))
+                    let jy = Noise.value2 52 (Vector2(wx, wy))
+                    let ddx = float32 cx + jx - px
+                    let ddy = float32 cy + jy - py
+                    let distance = MathF.Sqrt(ddx * ddx + ddy * ddy)
+
+                    if distance < nearest then
+                        second <- nearest
+                        nearest <- distance
+                        shade <- Noise.value2 53 (Vector2(wx, wy))
+                    elif distance < second then
+                        second <- distance
+
+            struct (nearest, second, shade)
+
         for layer in 0 .. MaterialCount - 1 do
             for y in 0 .. size - 1 do
                 for x in 0 .. size - 1 do
@@ -69,20 +104,18 @@ type Renderer(gl: GL, state: SoilState) =
                     // Per-material pattern, brightness centered on ~0.5.
                     let struct (r0, g0, b0) =
                         match layer with
-                        | 1 // dry sand: fine ripples
-                        | 2 -> // wet sand: same ripples, damper
-                            let ripple =
-                                MathF.Sin((fy + tileableNoise 41 6.0f x y * 0.35f) * 62.83f) * 0.06f
-
-                            let speck = (tileableNoise 42 90.0f x y - 0.5f) * 0.12f
-                            let v = 0.5f + ripple + speck
+                        | 1 // dry sand: fine grain speckle over soft mottling
+                        | 2 -> // wet sand: the same, damper
+                            let speck = (tileableNoise 42 110.0f x y - 0.5f) * 0.16f
+                            let mottle = (tileableNoise 41 9.0f x y - 0.5f) * 0.08f
+                            let v = 0.5f + speck + mottle
                             struct (v, v, v * 0.97f)
-                        | 3 -> // gravel: posterized stone blobs with dark gaps
-                            let blob = tileableNoise 43 26.0f x y
-                            let stone = MathF.Floor(blob * 6.0f) / 6.0f
-                            let gap = if MathF.Abs(blob * 6.0f - MathF.Round(blob * 6.0f)) < 0.08f then -0.16f else 0.0f
-                            let v = 0.42f + stone * 0.22f + gap
-                            struct (v, v, v)
+                        | 3 -> // gravel: cellular pebbles, each its own shade
+                            let struct (nearest, second, shade) = pebbles x y
+                            let gap = Math.Clamp((second - nearest) * 5.0f, 0.0f, 1.0f)
+                            let dome = 1.0f - nearest * 0.3f
+                            let v = (0.47f + shade * 0.26f) * dome * (0.62f + 0.38f * gap)
+                            struct (v * 1.02f, v, v * 0.97f)
                         | 4 -> // clay: broad smooth smears
                             let smear = tileableNoise 44 5.0f x y
                             let v = 0.44f + smear * 0.16f
@@ -94,10 +127,13 @@ type Renderer(gl: GL, state: SoilState) =
                             let patch = (tileableNoise 46 7.0f x y - 0.5f) * 0.18f
                             let v = 0.5f + blades + patch
                             struct (v * 0.9f, v * 1.05f, v * 0.85f)
-                        | _ -> // topsoil: multi-octave speckle
-                            let coarse = (tileableNoise 47 14.0f x y - 0.5f) * 0.14f
-                            let fine = (tileableNoise 48 70.0f x y - 0.5f) * 0.14f
-                            let v = 0.5f + coarse + fine
+                        | _ -> // topsoil: crumb structure — clods, grit, the odd stone
+                            let coarse = (tileableNoise 47 14.0f x y - 0.5f) * 0.12f
+                            let fine = (tileableNoise 48 80.0f x y - 0.5f) * 0.16f
+                            let struct (nearest, second, shade) = pebbles x y
+                            let crumb = Math.Clamp((second - nearest) * 4.0f, 0.0f, 1.0f) * 0.08f - 0.04f
+                            let stone = if shade > 0.93f && nearest < 0.35f then 0.14f else 0.0f
+                            let v = 0.5f + coarse + fine + crumb + stone
                             struct (v, v * 0.96f, v * 0.9f)
 
                     let index = (y * size + x) * 3
@@ -130,6 +166,7 @@ type Renderer(gl: GL, state: SoilState) =
         handle
     let clodProgram = GlUtil.program gl Shaders.clodVertex Shaders.clodFragment
     let solidProgram = GlUtil.program gl Shaders.solidVertex Shaders.solidFragment
+    let partProgram = GlUtil.program gl Shaders.partVertex Shaders.solidFragment
     let depthProgram = GlUtil.program gl Shaders.depthVertex Shaders.depthFragment
     let waterProgram = GlUtil.program gl Shaders.waterVertex Shaders.waterFragment
     let grainProgram = GlUtil.program gl Shaders.grainVertex Shaders.clodFragment
@@ -286,6 +323,42 @@ void main()
     let cylinderVbo = gl.GenBuffer()
     let cylinderIbo = gl.GenBuffer()
 
+    // 12-sided cone along local Y (height 1, base diameter 1, apex up):
+    // spruce tiers and traffic cones.
+    let coneVerts, coneIndices =
+        let sides = 12
+        let data = ResizeArray<float32>()
+        let indices = ResizeArray<uint32>()
+
+        for i in 0 .. sides - 1 do
+            let angle = float32 i / float32 sides * MathF.PI * 2.0f
+            let normal = Vector3.Normalize(Vector3(MathF.Cos angle, 0.5f, MathF.Sin angle))
+            // base ring (side shading), then one apex per segment
+            data.AddRange [| MathF.Cos angle * 0.5f; -0.5f; MathF.Sin angle * 0.5f; normal.X; normal.Y; normal.Z |]
+
+        for i in 0 .. sides - 1 do
+            let angle = (float32 i + 0.5f) / float32 sides * MathF.PI * 2.0f
+            let normal = Vector3.Normalize(Vector3(MathF.Cos angle, 0.5f, MathF.Sin angle))
+            data.AddRange [| 0.0f; 0.5f; 0.0f; normal.X; normal.Y; normal.Z |]
+
+        for i in 0 .. sides - 1 do
+            let angle = float32 i / float32 sides * MathF.PI * 2.0f
+            data.AddRange [| MathF.Cos angle * 0.5f; -0.5f; MathF.Sin angle * 0.5f; 0.0f; -1.0f; 0.0f |]
+
+        data.AddRange [| 0.0f; -0.5f; 0.0f; 0.0f; -1.0f; 0.0f |]
+        let baseCenter = uint32 (sides * 3)
+
+        for i in 0 .. sides - 1 do
+            let j = (i + 1) % sides
+            indices.AddRange [| uint32 (sides + i); uint32 j; uint32 i |]
+            indices.AddRange [| baseCenter; uint32 (2 * sides + i); uint32 (2 * sides + j) |]
+
+        data.ToArray(), indices.ToArray()
+
+    let coneVao = gl.GenVertexArray()
+    let coneVbo = gl.GenBuffer()
+    let coneIbo = gl.GenBuffer()
+
     // Water sheet: a tessellated grid over the whole map (the vertex shader
     // lifts it to the water table and ripples it). Terrain above the table
     // simply z-buffers it away, so ponds appear exactly in the dips.
@@ -318,143 +391,47 @@ void main()
     let waterVbo = gl.GenBuffer()
     let waterIbo = gl.GenBuffer()
 
-    /// Visual boxes per machine body part:
-    /// (body index, local offset, size, color, local Z rotation).
-    /// The bucket group is rotated +45°: mouth down-and-back at rest, up at
-    /// carry — the real profile. (Collision stays the proven axis-aligned
-    /// container; this is presentation.)
-    let bucketTilt = 0.785f
+    /// Bucket shell tilt, shared with the collision compound.
+    let bucketTilt = Tuning.BucketTilt
 
-    /// Generic (U17/Cat-style) model.
-    let machineBoxes =
-        [| 0, Vector3(0.0f, -0.1f, -0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f), 0.0f // track L
-           0, Vector3(0.0f, -0.1f, 0.55f), Vector3(1.8f, 0.35f, 0.35f), Vector3(0.12f, 0.12f, 0.13f), 0.0f // track R
-           0, Vector3(-0.85f, -0.1f, -0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f), 0.0f // idler L
-           0, Vector3(-0.85f, -0.1f, 0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f), 0.0f // idler R
-           0, Vector3(0.85f, -0.1f, -0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f), 0.0f // sprocket L
-           0, Vector3(0.85f, -0.1f, 0.55f), Vector3(0.22f, 0.42f, 0.42f), Vector3(0.09f, 0.09f, 0.1f), 0.0f // sprocket R
-           0, Vector3(0.0f, 0.05f, 0.0f), Vector3(1.5f, 0.3f, 1.0f), Vector3(0.25f, 0.25f, 0.27f), 0.0f // undercarriage
-           1, Vector3(0.1f, 0.0f, 0.0f), Vector3(1.05f, 0.7f, 0.95f), Vector3(0.85f, 0.45f, 0.08f), 0.0f // cab body
-           1, Vector3(0.28f, 0.14f, 0.0f), Vector3(0.55f, 0.44f, 0.97f), Vector3(0.16f, 0.2f, 0.24f), 0.0f // glass
-           1, Vector3(-0.35f, 0.42f, 0.28f), Vector3(0.1f, 0.22f, 0.1f), Vector3(0.1f, 0.1f, 0.11f), 0.0f // exhaust
-           1, Vector3(-0.28f, 0.38f, -0.2f), Vector3(0.45f, 0.1f, 0.4f), Vector3(0.78f, 0.4f, 0.07f), 0.0f // engine hood
-           1, Vector3(-0.75f, -0.1f, 0.0f), Vector3(0.45f, 0.5f, 0.9f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // counterweight
-           // Gooseneck boom: two angled segments meeting at a raised knee —
-           // the single silhouette feature that makes an excavator arm.
-           2, Vector3(-0.5f, 0.08f, 0.0f), Vector3(1.12f, 0.24f, 0.16f), Vector3(0.85f, 0.45f, 0.08f), 0.32f // boom lower
-           2, Vector3(0.48f, 0.13f, 0.0f), Vector3(1.15f, 0.19f, 0.15f), Vector3(0.85f, 0.45f, 0.08f), -0.24f // boom upper
-           2, Vector3(-0.05f, 0.26f, 0.0f), Vector3(0.34f, 0.16f, 0.17f), Vector3(0.75f, 0.39f, 0.07f), 0.04f // boom knee
-           3, Vector3(-0.2f, 0.0f, 0.0f), Vector3(0.75f, 0.16f, 0.13f), Vector3(0.85f, 0.45f, 0.08f), 0.0f // stick root
-           3, Vector3(0.33f, 0.0f, 0.0f), Vector3(0.5f, 0.12f, 0.11f), Vector3(0.82f, 0.43f, 0.08f), -0.06f // stick taper
-           3, Vector3(-0.25f, 0.09f, 0.0f), Vector3(0.5f, 0.07f, 0.14f), Vector3(0.75f, 0.39f, 0.07f), 0.0f // stick flange
-           2, Vector3(-0.95f, 0.0f, 0.0f), Vector3(0.1f, 0.24f, 0.2f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // boom pivot boss
-           3, Vector3(-0.55f, 0.0f, 0.0f), Vector3(0.08f, 0.19f, 0.16f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // stick pivot boss
-           4, Vector3(-0.28f, 0.0f, 0.0f), Vector3(0.09f, 0.16f, 0.16f), Vector3(0.3f, 0.3f, 0.32f), 0.0f // bucket pivot boss
-           // Teeth live on the MOUTH lip (-X side, where the physics
-           // cutting edge is), extended past a hardened lip plate.
-           4, Vector3(-0.27f, -0.18f, 0.0f), Vector3(0.08f, 0.05f, 0.58f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // lip plate
-           4, Vector3(-0.36f, -0.21f, -0.2f), Vector3(0.16f, 0.05f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
-           4, Vector3(-0.36f, -0.21f, -0.067f), Vector3(0.16f, 0.05f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
-           4, Vector3(-0.36f, -0.21f, 0.067f), Vector3(0.16f, 0.05f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
-           4, Vector3(-0.36f, -0.21f, 0.2f), Vector3(0.16f, 0.05f, 0.05f), Vector3(0.34f, 0.32f, 0.3f), bucketTilt // tooth
-           4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), Vector3(0.2f, 0.2f, 0.22f), bucketTilt // bucket floor
-           4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), Vector3(0.2f, 0.2f, 0.22f), bucketTilt // bucket back
-           4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), Vector3(0.22f, 0.22f, 0.24f), bucketTilt // bucket shell top
-           4, Vector3(0.0f, 0.0f, -0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f), bucketTilt // bucket side
-           4, Vector3(0.0f, 0.0f, 0.27f), Vector3(0.5f, 0.4f, 0.06f), Vector3(0.17f, 0.17f, 0.19f), bucketTilt |] // bucket side
+    /// Baked machine part meshes (see MachineMesh), built on first use per
+    /// machine name: (vao, vbo, ibo, index count) for each of the 5 bodies.
+    let partMeshes = Collections.Generic.Dictionary<string, struct (uint32 * uint32 * uint32 * int)[]>()
 
+    let partMeshesFor (name: string) =
+        match partMeshes.TryGetValue name with
+        | true, meshes -> meshes
+        | _ ->
+            let meshes =
+                MachineMesh.build name bucketTilt
+                |> Array.map (fun builder ->
+                    let vertices = builder.Vertices
+                    let indices = builder.Indices
+                    let vao = gl.GenVertexArray()
+                    let vbo = gl.GenBuffer()
+                    let ibo = gl.GenBuffer()
+                    gl.BindVertexArray vao
+                    gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo)
+                    GlUtil.upload gl BufferTargetARB.ArrayBuffer vertices vertices.Length BufferUsageARB.StaticDraw
+                    gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ibo)
+                    GlUtil.upload gl BufferTargetARB.ElementArrayBuffer indices indices.Length BufferUsageARB.StaticDraw
 
-    /// Takeuchi TB216, modeled against docs/takeuchi-tb216/images: white
-    /// body, red skirt band and corner accents, tall glazed cab on the
-    /// left, low engine cover rear-right, rounded white counterweight,
-    /// WHITE gooseneck boom on a front swing post, dozer blade, dark steel
-    /// bucket. Iterate with `just preview`.
-    let tb216Boxes =
-        let white = Vector3(0.88f, 0.87f, 0.83f)
-        let whiteDim = Vector3(0.8f, 0.79f, 0.76f)
-        let red = Vector3(0.68f, 0.07f, 0.09f)
-        let glass = Vector3(0.07f, 0.09f, 0.12f)
-        let dark = Vector3(0.1f, 0.1f, 0.11f)
-        let steel = Vector3(0.42f, 0.42f, 0.45f)
-        let grey = Vector3(0.3f, 0.3f, 0.32f)
+                    for attribute in 0..2 do
+                        gl.EnableVertexAttribArray(uint32 attribute)
 
-        [| // undercarriage + tracks
-           0, Vector3(0.0f, -0.1f, -0.55f), Vector3(1.75f, 0.38f, 0.34f), dark, 0.0f
-           0, Vector3(0.0f, -0.1f, 0.55f), Vector3(1.75f, 0.38f, 0.34f), dark, 0.0f
-           0, Vector3(0.0f, 0.06f, 0.0f), Vector3(1.25f, 0.3f, 0.95f), grey, 0.0f
-           // dozer blade on the arm side
-           0, Vector3(0.95f, -0.08f, -0.3f), Vector3(0.5f, 0.09f, 0.09f), grey, 0.1f
-           0, Vector3(0.95f, -0.08f, 0.3f), Vector3(0.5f, 0.09f, 0.09f), grey, 0.1f
-           0, Vector3(1.22f, -0.06f, 0.0f), Vector3(0.09f, 0.34f, 1.3f), steel * 0.75f, -0.08f
-           // house: red skirt, white bodywork
-           1, Vector3(0.0f, -0.14f, 0.0f), Vector3(1.34f, 0.2f, 1.04f), red, 0.0f
-           1, Vector3(0.55f, 0.04f, 0.3f), Vector3(0.16f, 0.26f, 0.34f), red, 0.0f
-           // cab (left side), glass front/side, white roof
-           1, Vector3(0.14f, 0.34f, -0.18f), Vector3(0.88f, 1.08f, 0.62f), white, 0.0f
-           1, Vector3(0.56f, 0.38f, -0.18f), Vector3(0.05f, 0.85f, 0.54f), glass, 0.0f
-           1, Vector3(0.14f, 0.42f, -0.47f), Vector3(0.76f, 0.78f, 0.05f), glass, 0.0f
-           1, Vector3(0.14f, 0.9f, -0.18f), Vector3(0.98f, 0.12f, 0.7f), white, 0.0f
-           // engine cover right-rear, vent, counterweight
-           1, Vector3(-0.18f, 0.08f, 0.3f), Vector3(0.85f, 0.66f, 0.42f), white, 0.0f
-           1, Vector3(-0.18f, 0.14f, 0.5f), Vector3(0.55f, 0.34f, 0.03f), grey, 0.0f
-           1, Vector3(-0.58f, 0.04f, 0.0f), Vector3(0.38f, 0.75f, 0.96f), white, 0.0f
-           1, Vector3(-0.73f, 0.16f, 0.0f), Vector3(0.2f, 0.5f, 0.8f), whiteDim, 0.0f
-           1, Vector3(-0.64f, -0.24f, -0.42f), Vector3(0.26f, 0.26f, 0.15f), red, 0.0f
-           1, Vector3(-0.64f, -0.24f, 0.42f), Vector3(0.26f, 0.26f, 0.15f), red, 0.0f
-           // swing post
-           1, Vector3(0.56f, -0.08f, 0.0f), Vector3(0.3f, 0.36f, 0.28f), whiteDim, 0.0f
-           // boom: WHITE gooseneck
-           2, Vector3(-0.5f, 0.08f, 0.0f), Vector3(1.12f, 0.26f, 0.18f), white, 0.32f
-           2, Vector3(0.48f, 0.13f, 0.0f), Vector3(1.15f, 0.2f, 0.16f), white, -0.24f
-           2, Vector3(-0.05f, 0.28f, 0.0f), Vector3(0.36f, 0.18f, 0.19f), white, 0.04f
-           // stick: white, tapered
-           3, Vector3(-0.2f, 0.0f, 0.0f), Vector3(0.75f, 0.17f, 0.14f), white, 0.0f
-           3, Vector3(0.33f, 0.0f, 0.0f), Vector3(0.5f, 0.13f, 0.12f), whiteDim, -0.06f
-           // bucket: dark steel, existing tilt convention
-           4, Vector3(-0.27f, -0.18f, 0.0f), Vector3(0.08f, 0.05f, 0.58f), steel * 0.9f, bucketTilt
-           4, Vector3(-0.36f, -0.21f, -0.2f), Vector3(0.16f, 0.05f, 0.05f), steel * 0.8f, bucketTilt
-           4, Vector3(-0.36f, -0.21f, -0.067f), Vector3(0.16f, 0.05f, 0.05f), steel * 0.8f, bucketTilt
-           4, Vector3(-0.36f, -0.21f, 0.067f), Vector3(0.16f, 0.05f, 0.05f), steel * 0.8f, bucketTilt
-           4, Vector3(-0.36f, -0.21f, 0.2f), Vector3(0.16f, 0.05f, 0.05f), steel * 0.8f, bucketTilt
-           4, Vector3(0.0f, -0.17f, 0.0f), Vector3(0.5f, 0.06f, 0.6f), grey * 0.8f, bucketTilt
-           4, Vector3(0.22f, 0.0f, 0.0f), Vector3(0.06f, 0.4f, 0.6f), grey * 0.8f, bucketTilt
-           4, Vector3(0.075f, 0.17f, 0.0f), Vector3(0.35f, 0.06f, 0.6f), grey * 0.9f, bucketTilt
-           4, Vector3(0.0f, 0.0f, -0.27f), Vector3(0.5f, 0.4f, 0.06f), grey * 0.7f, bucketTilt
-           4, Vector3(0.0f, 0.0f, 0.27f), Vector3(0.5f, 0.4f, 0.06f), grey * 0.7f, bucketTilt |]
+                        gl.VertexAttribPointer(
+                            uint32 attribute,
+                            3,
+                            VertexAttribPointerType.Float,
+                            false,
+                            36u,
+                            IntPtr(attribute * 12).ToPointer()
+                        )
 
-    let boxesFor (name: string) =
-        if name = "TB216" then tb216Boxes else machineBoxes
+                    struct (vao, vbo, ibo, indices.Length))
 
-    /// Cylindrical detail parts: (body, offset, length, diameter, color, axis).
-    let tb216Cylinders =
-        let dark = Vector3(0.09f, 0.09f, 0.1f)
-        let steel = Vector3(0.45f, 0.45f, 0.48f)
-
-        [| // road wheels / idlers / sprockets (axis Z)
-           0, Vector3(-0.82f, -0.14f, -0.55f), 0.36f, 0.42f, dark, 2
-           0, Vector3(-0.82f, -0.14f, 0.55f), 0.36f, 0.42f, dark, 2
-           0, Vector3(0.82f, -0.14f, -0.55f), 0.36f, 0.42f, dark, 2
-           0, Vector3(0.82f, -0.14f, 0.55f), 0.36f, 0.42f, dark, 2
-           0, Vector3(-0.3f, -0.26f, -0.55f), 0.3f, 0.2f, dark, 2
-           0, Vector3(-0.3f, -0.26f, 0.55f), 0.3f, 0.2f, dark, 2
-           0, Vector3(0.3f, -0.26f, -0.55f), 0.3f, 0.2f, dark, 2
-           0, Vector3(0.3f, -0.26f, 0.55f), 0.3f, 0.2f, dark, 2
-           // exhaust stub (axis Y)
-           1, Vector3(-0.4f, 0.48f, 0.3f), 0.24f, 0.09f, dark, 1
-           // pivot pins (axis Z)
-           2, Vector3(-0.95f, 0.0f, 0.0f), 0.3f, 0.22f, steel, 2
-           3, Vector3(-0.55f, 0.0f, 0.0f), 0.24f, 0.18f, steel, 2
-           4, Vector3(-0.28f, 0.0f, 0.0f), 0.24f, 0.16f, steel, 2
-           // cab roof beacon (axis Y)
-           1, Vector3(0.4f, 1.0f, -0.35f), 0.12f, 0.09f, Vector3(0.85f, 0.45f, 0.1f), 1
-           // counterweight lifting bosses (axis Z)
-           1, Vector3(-0.85f, 0.3f, -0.25f), 0.06f, 0.1f, steel, 0
-           1, Vector3(-0.85f, 0.3f, 0.25f), 0.06f, 0.1f, steel, 0 |]
-
-    let genericCylinders: (int * Vector3 * float32 * float32 * Vector3 * int)[] = [||]
-
-    let cylindersFor (name: string) =
-        if name = "TB216" then tb216Cylinders else genericCylinders
+            partMeshes.[name] <- meshes
+            meshes
 
     // Shared index buffer: same grid topology for every tile.
     let tileIndexCount = SoilConfig.TileSize * SubRes * SoilConfig.TileSize * SubRes * 6
@@ -566,7 +543,7 @@ void main()
     let clodInstanceVbo = gl.GenBuffer()
     // xyz + radius + rgb per instance.
     let instanceFloats = 7
-    let instanceScratch = Array.zeroCreate<float32> ((Clumps.MaxClumps + 65) * instanceFloats)
+    let instanceScratch = Array.zeroCreate<float32> ((Clumps.MaxClumps * 3 + 400) * instanceFloats)
 
     // Grain layer: its own VAO over the 20-tri mesh; pool grains + clump
     // clusters share one big instance buffer.
@@ -665,7 +642,21 @@ void main()
         for cz in 0 .. cornerVerts - 1 do
             for cx in 0 .. cornerVerts - 1 do
                 cornerHeightScratch.[cz * cornerVerts + cx] <- cornerHeight (x0 + cx) (z0 + cz)
-                cornerColorScratch.[cz * cornerVerts + cx] <- columnColor (x0 + cx) (z0 + cz)
+                // Mean of the columns sharing the corner (as the heights
+                // are): a one-column spill is a soft smudge, not a square.
+                let mutable sum = Vector3.Zero
+                let mutable samples = 0.0f
+
+                for dz in -1 .. 0 do
+                    for dx in -1 .. 0 do
+                        let sx = x0 + cx + dx
+                        let sz = z0 + cz + dz
+
+                        if sx >= 0 && sz >= 0 && sx < config.CellsX && sz < config.CellsZ then
+                            sum <- sum + columnColor sx sz
+                            samples <- samples + 1.0f
+
+                cornerColorScratch.[cz * cornerVerts + cx] <- sum / samples
                 cornerMaterialScratch.[cz * cornerVerts + cx] <- columnMaterial (x0 + cx) (z0 + cz)
 
         // Bilinear samplers over the corner grid, in sub-vertex coordinates.
@@ -803,6 +794,17 @@ void main()
         gl.EnableVertexAttribArray 1u
         gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
 
+        // Cone mesh.
+        gl.BindVertexArray coneVao
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, coneVbo)
+        GlUtil.upload gl BufferTargetARB.ArrayBuffer coneVerts coneVerts.Length BufferUsageARB.StaticDraw
+        gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, coneIbo)
+        GlUtil.upload gl BufferTargetARB.ElementArrayBuffer coneIndices coneIndices.Length BufferUsageARB.StaticDraw
+        gl.EnableVertexAttribArray 0u
+        gl.VertexAttribPointer(0u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr.Zero.ToPointer())
+        gl.EnableVertexAttribArray 1u
+        gl.VertexAttribPointer(1u, 3, VertexAttribPointerType.Float, false, 24u, IntPtr(12).ToPointer())
+
         // Water sheet mesh (position only).
         gl.BindVertexArray waterVao
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, waterVbo)
@@ -855,8 +857,7 @@ void main()
     /// (child part, local anchor). Drawn as barrel+rod beams between the
     /// interpolated part poses, so the cylinders visibly stroke.
     let cylinderRuns =
-        [| 1, Vector3(0.5f, -0.2f, -0.3f), 2, Vector3(-0.35f, 0.12f, -0.09f) // boom cyl L
-           1, Vector3(0.5f, -0.2f, 0.3f), 2, Vector3(-0.35f, 0.12f, 0.09f) // boom cyl R
+        [| 1, Vector3(0.6f, -0.3f, 0.0f), 2, Vector3(-0.35f, 0.08f, 0.0f) // boom cyl (between the cheek plates)
            2, Vector3(0.25f, 0.16f, 0.0f), 3, Vector3(-0.72f, 0.1f, 0.0f) // stick cyl
            3, Vector3(-0.35f, 0.14f, 0.0f), 4, Vector3(0.05f, 0.24f, 0.0f) |] // bucket cyl
 
@@ -894,15 +895,46 @@ void main()
             m.M43 <- mid.Z
             m
 
-    /// Every mesh instance of the machine at the interpolated pose:
-    /// boxes, cylindrical details, and hydraulic barrel+rod runs.
-    /// `emit useCylinderMesh model color` — shared by the shadow depth pass
-    /// and the lit main pass.
+    /// Model matrix of each baked machine part at the interpolated pose.
+    let emitMachineParts
+        (previous: RenderSnapshot)
+        (current: RenderSnapshot)
+        (alpha: float32)
+        (draw: struct (uint32 * uint32 * uint32 * int) -> Matrix4x4 -> unit)
+        =
+        if current.MachinePartCount > 0 then
+            let meshes = partMeshesFor current.MachineName
+
+            for part in 0 .. min current.MachinePartCount meshes.Length - 1 do
+                let hasPrevious = part < previous.MachinePartCount
+
+                let position =
+                    if hasPrevious then
+                        Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
+                    else
+                        current.MachinePositions.[part]
+
+                let orientation =
+                    if hasPrevious then
+                        Quaternion.Slerp(previous.MachineOrientations.[part], current.MachineOrientations.[part], alpha)
+                    else
+                        current.MachineOrientations.[part]
+
+                draw
+                    meshes.[part]
+                    (Matrix4x4.CreateScale current.MachineScale
+                     * Matrix4x4.CreateFromQuaternion orientation
+                     * Matrix4x4.CreateTranslation position)
+
+    /// The machine's moving hydraulics at the interpolated pose: barrel+rod
+    /// runs between the parts (the parts themselves are baked meshes).
+    /// `emit mesh model color` (mesh: 0 cube, 1 cylinder, 2 cone) — shared
+    /// by the shadow depth pass and the lit main pass.
     let emitMachineMeshes
         (previous: RenderSnapshot)
         (current: RenderSnapshot)
         (alpha: float32)
-        (emit: bool -> Matrix4x4 -> Vector3 -> unit)
+        (emit: int -> Matrix4x4 -> Vector3 -> unit)
         =
         if current.MachinePartCount > 0 then
             let scaleFactor = current.MachineScale
@@ -924,38 +956,6 @@ void main()
 
                 position, orientation
 
-            for (part, offset, size, color, localRotation) in boxesFor current.MachineName do
-                if part < current.MachinePartCount then
-                    let position, orientation = partPose part
-
-                    let model =
-                        Matrix4x4.CreateScale(size * scaleFactor)
-                        * Matrix4x4.CreateTranslation(offset * scaleFactor)
-                        * Matrix4x4.CreateRotationZ localRotation
-                        * Matrix4x4.CreateFromQuaternion orientation
-                        * Matrix4x4.CreateTranslation position
-
-                    emit false model color
-
-            for (part, offset, length, diameter, color, axis) in cylindersFor current.MachineName do
-                if part < current.MachinePartCount then
-                    let position, orientation = partPose part
-
-                    let axisRotation =
-                        match axis with
-                        | 1 -> Matrix4x4.CreateRotationZ(MathF.PI / 2.0f)
-                        | 2 -> Matrix4x4.CreateRotationY(MathF.PI / 2.0f)
-                        | _ -> Matrix4x4.Identity
-
-                    let model =
-                        Matrix4x4.CreateScale(length * scaleFactor, diameter * scaleFactor, diameter * scaleFactor)
-                        * axisRotation
-                        * Matrix4x4.CreateTranslation(offset * scaleFactor)
-                        * Matrix4x4.CreateFromQuaternion orientation
-                        * Matrix4x4.CreateTranslation position
-
-                    emit true model color
-
             for (parentPart, parentAnchor, childPart, childAnchor) in cylinderRuns do
                 if childPart < current.MachinePartCount then
                     let parentPosition, parentOrientation = partPose parentPart
@@ -969,8 +969,106 @@ void main()
 
                     // Barrel covers the parent 55%; the rod runs the rest.
                     let barrelEnd = Vector3.Lerp(a, b, 0.55f)
-                    emit true (beamMatrix a barrelEnd (0.09f * scaleFactor)) (Vector3(0.16f, 0.16f, 0.18f))
-                    emit true (beamMatrix barrelEnd b (0.045f * scaleFactor)) (Vector3(0.75f, 0.76f, 0.78f))
+                    emit 1 (beamMatrix a barrelEnd (0.085f * scaleFactor)) (Vector3(0.16f, 0.16f, 0.18f))
+                    emit 1 (beamMatrix barrelEnd b (0.045f * scaleFactor)) (Vector3(0.75f, 0.76f, 0.78f))
+
+    /// The job site and its surroundings: spruce, the site cabin, the
+    /// staked-and-taped foundation pit, traffic cones. Same `emit` contract
+    /// as the machine, so everything here also casts shadows.
+    let emitSceneryMeshes (current: RenderSnapshot) (emit: int -> Matrix4x4 -> Vector3 -> unit) =
+        let box (center: Vector3) (size: Vector3) (color: Vector3) =
+            emit 0 (Matrix4x4.CreateScale size * Matrix4x4.CreateTranslation center) color
+
+        // Spruce: a trunk and three stacked tiers, sized by tree height,
+        // each tree its own shade of green.
+        for i in 0 .. current.TreeCount - 1 do
+            let root = current.TreePositions.[i]
+            let height = current.TreeHeights.[i]
+            let shade = 0.8f + hash01 (i * 17 + 3) * 0.45f
+            let needles = Vector3(0.09f, 0.22f + hash01 (i * 17 + 5) * 0.06f, 0.11f) * shade
+
+            emit
+                1
+                (Matrix4x4.CreateScale(height * 0.4f, height * 0.07f, height * 0.07f)
+                 * Matrix4x4.CreateRotationZ(MathF.PI / 2.0f)
+                 * Matrix4x4.CreateTranslation(root + Vector3(0.0f, height * 0.15f, 0.0f)))
+                (Vector3(0.24f, 0.17f, 0.11f))
+
+            for (baseAt, tall, radius, tint) in
+                [| 0.18f, 0.46f, 0.25f, 0.85f; 0.42f, 0.38f, 0.19f, 1.0f; 0.66f, 0.34f, 0.12f, 1.15f |] do
+                emit
+                    2
+                    (Matrix4x4.CreateScale(height * radius * 2.0f, height * tall, height * radius * 2.0f)
+                     * Matrix4x4.CreateRotationY(hash01 (i * 17 + 7) * 6.28f)
+                     * Matrix4x4.CreateTranslation(root + Vector3(0.0f, height * (baseAt + tall * 0.5f), 0.0f)))
+                    (needles * tint)
+
+        match state.Site with
+        | ValueSome site ->
+            // Site cabin: a container office with a door, a window, skids.
+            let cabin = Vector3(site.CabinX, site.PadHeight, site.CabinZ)
+            let paint = Vector3(0.16f, 0.32f, 0.44f)
+            box (cabin + Vector3(0.0f, 1.3f, 0.0f)) (Vector3(5.0f, 2.3f, 2.4f)) paint
+            box (cabin + Vector3(0.0f, 2.5f, 0.0f)) (Vector3(5.1f, 0.1f, 2.5f)) (Vector3(0.82f, 0.83f, 0.84f))
+            box (cabin + Vector3(0.0f, 0.1f, 0.0f)) (Vector3(4.8f, 0.2f, 2.2f)) (Vector3(0.12f, 0.12f, 0.13f))
+            box (cabin + Vector3(1.3f, 1.2f, 1.21f)) (Vector3(0.9f, 1.9f, 0.04f)) (paint * 0.7f)
+            box (cabin + Vector3(-0.9f, 1.6f, 1.21f)) (Vector3(1.3f, 0.8f, 0.04f)) (Vector3(0.1f, 0.14f, 0.18f))
+
+            for rib in -5 .. 5 do
+                box
+                    (cabin + Vector3(float32 rib * 0.45f, 1.3f, -1.21f))
+                    (Vector3(0.12f, 2.2f, 0.04f))
+                    (paint * 0.85f)
+
+            // Foundation pit: corner and mid stakes joined by tape. Stakes
+            // stand on whatever ground is left under them.
+            let stakeAt (x: float32) (z: float32) =
+                Vector3(x, Soil.surfaceHeight state x z, z)
+
+            let midX = (site.PitMinX + site.PitMaxX) * 0.5f
+            let midZ = (site.PitMinZ + site.PitMaxZ) * 0.5f
+
+            let stakes =
+                [| stakeAt site.PitMinX site.PitMinZ
+                   stakeAt midX site.PitMinZ
+                   stakeAt site.PitMaxX site.PitMinZ
+                   stakeAt site.PitMaxX midZ
+                   stakeAt site.PitMaxX site.PitMaxZ
+                   stakeAt midX site.PitMaxZ
+                   stakeAt site.PitMinX site.PitMaxZ
+                   stakeAt site.PitMinX midZ |]
+
+            for i in 0 .. stakes.Length - 1 do
+                let foot = stakes.[i]
+                box (foot + Vector3(0.0f, 0.4f, 0.0f)) (Vector3(0.06f, 0.9f, 0.06f)) (Vector3(0.78f, 0.66f, 0.45f))
+                box (foot + Vector3(0.0f, 0.82f, 0.0f)) (Vector3(0.075f, 0.12f, 0.075f)) (Vector3(0.95f, 0.35f, 0.05f))
+                let next = stakes.[(i + 1) % stakes.Length]
+
+                emit
+                    0
+                    (beamMatrix (foot + Vector3(0.0f, 0.7f, 0.0f)) (next + Vector3(0.0f, 0.7f, 0.0f)) 0.025f)
+                    (if i % 2 = 0 then Vector3(0.95f, 0.35f, 0.05f) else Vector3(0.92f, 0.9f, 0.85f))
+
+            // Traffic cones marking the way from the yard to the pit.
+            for (dx, dz) in [| 6.6f, -3.4f; 6.6f, 1.4f; 5.4f, -3.4f; 5.4f, 1.4f |] do
+                let x = site.YardX + dx
+                let z = site.YardZ + dz
+                let foot = Vector3(x, Soil.surfaceHeight state x z, z)
+                box (foot + Vector3(0.0f, 0.02f, 0.0f)) (Vector3(0.34f, 0.04f, 0.34f)) (Vector3(0.1f, 0.1f, 0.1f))
+
+                emit
+                    2
+                    (Matrix4x4.CreateScale(0.24f, 0.5f, 0.24f)
+                     * Matrix4x4.CreateTranslation(foot + Vector3(0.0f, 0.29f, 0.0f)))
+                    (Vector3(0.95f, 0.33f, 0.04f))
+
+                emit
+                    1
+                    (Matrix4x4.CreateScale(0.07f, 0.15f, 0.15f)
+                     * Matrix4x4.CreateRotationZ(MathF.PI / 2.0f)
+                     * Matrix4x4.CreateTranslation(foot + Vector3(0.0f, 0.3f, 0.0f)))
+                    (Vector3(0.93f, 0.92f, 0.9f))
+        | ValueNone -> ()
 
     /// Rebuild up to `budget` dirty tiles (render meshes only).
     member _.RebuildDirtyTiles(budget: int) =
@@ -1025,17 +1123,38 @@ void main()
             gl.BindVertexArray tileVaos.[tile]
             gl.DrawElements(PrimitiveType.Triangles, uint32 tileIndexCount, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer())
 
-        emitMachineMeshes previous current alpha (fun useCylinderMesh model _ ->
-            gl.BindVertexArray (if useCylinderMesh then cylinderVao else cubeVao)
+        let meshVao (mesh: int) =
+            match mesh with
+            | 1 -> cylinderVao
+            | 2 -> coneVao
+            | _ -> cubeVao
+
+        let meshIndexCount (mesh: int) =
+            match mesh with
+            | 1 -> cylinderIndices.Length
+            | 2 -> coneIndices.Length
+            | _ -> cubeIndices.Length
+
+        let drawDepth (mesh: int) (model: Matrix4x4) (_: Vector3) =
+            gl.BindVertexArray(meshVao mesh)
             let mutable mvp = model * lightViewProjection
             gl.UniformMatrix4(depthMvpLocation, 1u, false, &mvp.M11)
 
             gl.DrawElements(
                 PrimitiveType.Triangles,
-                uint32 (if useCylinderMesh then cylinderIndices.Length else cubeIndices.Length),
+                uint32 (meshIndexCount mesh),
                 DrawElementsType.UnsignedInt,
                 IntPtr.Zero.ToPointer()
-            ))
+            )
+
+        emitMachineMeshes previous current alpha drawDepth
+        emitSceneryMeshes current drawDepth
+
+        emitMachineParts previous current alpha (fun (struct (vao, _, _, indexCount)) model ->
+            gl.BindVertexArray vao
+            let mutable mvp = model * lightViewProjection
+            gl.UniformMatrix4(depthMvpLocation, 1u, false, &mvp.M11)
+            gl.DrawElements(PrimitiveType.Triangles, uint32 indexCount, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer()))
 
         gl.Disable EnableCap.PolygonOffsetFill
         gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0u)
@@ -1073,27 +1192,124 @@ void main()
             gl.BindVertexArray tileVaos.[tile]
             gl.DrawElements(PrimitiveType.Triangles, uint32 tileIndexCount, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer())
 
-        // Machine: one lit pass over every box/cylinder/beam instance.
-        if current.MachinePartCount > 0 then
-            bindShadedProgram solidProgram
-            let modelLocation = gl.GetUniformLocation(solidProgram, "model")
+        // Machine + scenery: one lit pass over every box/cylinder/cone.
+        bindShadedProgram solidProgram
+        let modelLocation = gl.GetUniformLocation(solidProgram, "model")
 
-            emitMachineMeshes previous current alpha (fun useCylinderMesh model color ->
-                gl.BindVertexArray (if useCylinderMesh then cylinderVao else cubeVao)
-                let mutable m = model
-                gl.UniformMatrix4(modelLocation, 1u, false, &m.M11)
-                GlUtil.uniform3f gl solidProgram "solidColor" color
+        let drawLit (mesh: int) (model: Matrix4x4) (color: Vector3) =
+            gl.BindVertexArray(meshVao mesh)
+            let mutable m = model
+            gl.UniformMatrix4(modelLocation, 1u, false, &m.M11)
+            GlUtil.uniform3f gl solidProgram "solidColor" color
 
-                gl.DrawElements(
-                    PrimitiveType.Triangles,
-                    uint32 (if useCylinderMesh then cylinderIndices.Length else cubeIndices.Length),
-                    DrawElementsType.UnsignedInt,
-                    IntPtr.Zero.ToPointer()
-                ))
+            gl.DrawElements(
+                PrimitiveType.Triangles,
+                uint32 (meshIndexCount mesh),
+                DrawElementsType.UnsignedInt,
+                IntPtr.Zero.ToPointer()
+            )
 
-        // Clumps are no longer drawn as balls: each renders as a cluster of
-        // grains (below). Their interpolated positions seed the clusters.
+        emitMachineMeshes previous current alpha drawLit
+        emitSceneryMeshes current drawLit
+
+        bindShadedProgram partProgram
+        let partModelLocation = gl.GetUniformLocation(partProgram, "model")
+
+        emitMachineParts previous current alpha (fun (struct (vao, _, _, indexCount)) model ->
+            gl.BindVertexArray vao
+            let mutable m = model
+            gl.UniformMatrix4(partModelLocation, 1u, false, &m.M11)
+            gl.DrawElements(PrimitiveType.Triangles, uint32 indexCount, DrawElementsType.UnsignedInt, IntPtr.Zero.ToPointer()))
+
+        // Loose soil is drawn as CLODS: each clump is a few lumpy, squashed
+        // chunks that overlap into one wad, dusted with crumbs (below). The
+        // old all-grain clusters read as heaps of coffee beans.
         let mutable instances = 0
+
+        let pushClod (x: float32) (y: float32) (z: float32) (radius: float32) (color: Vector3) =
+            if (instances + 1) * instanceFloats <= instanceScratch.Length then
+                let baseIndex = instances * instanceFloats
+                instanceScratch.[baseIndex] <- x
+                instanceScratch.[baseIndex + 1] <- y
+                instanceScratch.[baseIndex + 2] <- z
+                instanceScratch.[baseIndex + 3] <- radius
+                instanceScratch.[baseIndex + 4] <- color.X
+                instanceScratch.[baseIndex + 5] <- color.Y
+                instanceScratch.[baseIndex + 6] <- color.Z
+                instances <- instances + 1
+
+        for i in 0 .. current.Count - 1 do
+            let handle = current.Handles.[i]
+            let mutable px = current.X.[i]
+            let mutable py = current.Y.[i]
+            let mutable pz = current.Z.[i]
+            let mutable j = 0
+
+            while j < previous.Count do
+                if previous.Handles.[j] = handle then
+                    px <- previous.X.[j] + (px - previous.X.[j]) * alpha
+                    py <- previous.Y.[j] + (py - previous.Y.[j]) * alpha
+                    pz <- previous.Z.[j] + (pz - previous.Z.[j]) * alpha
+                    j <- previous.Count
+                else
+                    j <- j + 1
+
+            let radius = current.Radius.[i]
+            // Freshly turned soil is damp: a shade darker than the surface.
+            let baseColor = materialColor current.Materials.[i] * 0.86f
+
+            for k in 0..2 do
+                let seed = handle * 31 + k * 7
+
+                pushClod
+                    (px + (hash01 seed - 0.5f) * radius)
+                    (py + (hash01 (seed + 1) - 0.6f) * radius * 0.6f)
+                    (pz + (hash01 (seed + 2) - 0.5f) * radius)
+                    (radius * (0.55f + hash01 (seed + 3) * 0.4f))
+                    (baseColor * (0.88f + hash01 (seed + 4) * 0.24f))
+
+        // Payload: a mound of clods in the bowl that grows with the load.
+        if current.MachinePartCount > 4 && current.PayloadKg > 0.5f then
+            let part = 4
+            let hasPrevious = part < previous.MachinePartCount
+
+            let bucketPosition =
+                if hasPrevious then
+                    Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
+                else
+                    current.MachinePositions.[part]
+
+            let bucketOrientation =
+                if hasPrevious then
+                    Quaternion.Slerp(previous.MachineOrientations.[part], current.MachineOrientations.[part], alpha)
+                else
+                    current.MachineOrientations.[part]
+
+            let scaleFactor = current.MachineScale
+            let tiltRotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, bucketTilt)
+            let fill = Math.Clamp(current.PayloadKg / MathF.Max(current.PayloadCapacityKg, 1.0f), 0.05f, 1.0f)
+            let heapColor = materialColor current.PayloadMaterial * 0.86f
+
+            for k in 0 .. 5 + int (fill * 20.0f) do
+                // Wide and low when nearly empty, heaped over the lip when full.
+                let localPosition =
+                    Vector3(
+                        (hash01 (k * 11 + 1) - 0.45f) * 0.36f,
+                        -0.13f + hash01 (k * 11 + 3) * 0.3f * fill,
+                        (hash01 (k * 11 + 5) - 0.5f) * 0.44f
+                    )
+                    * scaleFactor
+
+                let world =
+                    bucketPosition
+                    + Vector3.Transform(Vector3.Transform(localPosition, tiltRotation), bucketOrientation)
+
+                pushClod
+                    world.X
+                    world.Y
+                    world.Z
+                    (scaleFactor * (0.06f + hash01 (k * 11 + 7) * 0.05f))
+                    (heapColor * (0.85f + hash01 (k * 11 + 9) * 0.3f))
 
         // Rocks: same instancing, boulder grey.
         for i in 0 .. current.RockCount - 1 do
@@ -1102,9 +1318,12 @@ void main()
             instanceScratch.[baseIndex + 1] <- current.RockPositions.[i].Y
             instanceScratch.[baseIndex + 2] <- current.RockPositions.[i].Z
             instanceScratch.[baseIndex + 3] <- current.RockRadii.[i]
-            instanceScratch.[baseIndex + 4] <- 0.42f
-            instanceScratch.[baseIndex + 5] <- 0.42f
-            instanceScratch.[baseIndex + 6] <- 0.44f
+            // Each boulder its own granite: grey to faintly warm.
+            let tone = 0.34f + hash01 (i * 13 + 1) * 0.16f
+            let warmth = hash01 (i * 13 + 2) * 0.05f
+            instanceScratch.[baseIndex + 4] <- tone + warmth
+            instanceScratch.[baseIndex + 5] <- tone + warmth * 0.5f
+            instanceScratch.[baseIndex + 6] <- tone
             instances <- instances + 1
 
         // Brush indicator rides along as one extra instance.
@@ -1191,85 +1410,22 @@ void main()
                 grains.VelocitiesY.[i]
                 grains.VelocitiesZ.[i]
 
-        // Payload heap: the dug material sits IN the bucket as a mound of
-        // grains that grows while digging and drains while pouring.
-        if current.MachinePartCount > 4 && current.PayloadKg > 0.5f then
-            let part = 4
-            let hasPrevious = part < previous.MachinePartCount
-
-            let bucketPosition =
-                if hasPrevious then
-                    Vector3.Lerp(previous.MachinePositions.[part], current.MachinePositions.[part], alpha)
-                else
-                    current.MachinePositions.[part]
-
-            let bucketOrientation =
-                if hasPrevious then
-                    Quaternion.Slerp(previous.MachineOrientations.[part], current.MachineOrientations.[part], alpha)
-                else
-                    current.MachineOrientations.[part]
-
-            let scaleFactor = current.MachineScale
-            let tiltRotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, bucketTilt)
-            let fill = Math.Clamp(current.PayloadKg / MathF.Max(current.PayloadCapacityKg, 1.0f), 0.05f, 1.0f)
-            let heapGrains = int (fill * 300.0f)
-            let heapColor = materialColor current.PayloadMaterial
-
-            for k in 0 .. heapGrains - 1 do
-                let localPosition =
-                    Vector3(
-                        (hash01 (k * 7 + 1) - 0.55f) * 0.38f,
-                        -0.14f + hash01 (k * 7 + 3) * 0.26f * fill,
-                        (hash01 (k * 7 + 5) - 0.5f) * 0.46f
-                    )
-                    * scaleFactor
-
-                let world =
-                    bucketPosition
-                    + Vector3.Transform(Vector3.Transform(localPosition, tiltRotation), bucketOrientation)
-
-                pushGrain
-                    world.X
-                    world.Y
-                    world.Z
-                    (scaleFactor * (0.022f + hash01 (k * 7 + 9) * 0.02f))
-                    (heapColor * (0.8f + hash01 (k * 7 + 11) * 0.4f))
-
-        // Clump clusters: the mass carrier rendered as a wad of dirt.
+        // Crumbs: a few fine grains round each clump so the clods don't
+        // read as clean boulders.
         for i in 0 .. current.Count - 1 do
             let handle = current.Handles.[i]
-            let mutable px = current.X.[i]
-            let mutable py = current.Y.[i]
-            let mutable pz = current.Z.[i]
-            let mutable j = 0
-
-            while j < previous.Count do
-                if previous.Handles.[j] = handle then
-                    px <- previous.X.[j] + (px - previous.X.[j]) * alpha
-                    py <- previous.Y.[j] + (py - previous.Y.[j]) * alpha
-                    pz <- previous.Z.[j] + (pz - previous.Z.[j]) * alpha
-                    j <- previous.Count
-                else
-                    j <- j + 1
-
             let radius = current.Radius.[i]
-            let baseColor = materialColor current.Materials.[i]
-            // Fine wads: many small pieces, none bead-sized.
-            let pieces = Math.Clamp(int (radius * 260.0f), 16, 72)
+            let baseColor = materialColor current.Materials.[i] * 0.86f
 
-            for k in 0 .. pieces - 1 do
+            for k in 0..7 do
                 let seed = handle * 31 + k
-                let ox = (hash01 seed - 0.5f) * 1.5f * radius
-                let oy = (hash01 (seed + 101) - 0.5f) * 1.5f * radius
-                let oz = (hash01 (seed + 202) - 0.5f) * 1.5f * radius
-                let tint = 0.8f + hash01 (seed + 303) * 0.4f
 
                 pushGrain
-                    (px + ox)
-                    (py + oy)
-                    (pz + oz)
-                    (radius * (0.11f + hash01 (seed + 404) * 0.09f))
-                    (baseColor * tint)
+                    (current.X.[i] + (hash01 seed - 0.5f) * 2.4f * radius)
+                    (current.Y.[i] + (hash01 (seed + 101) - 0.7f) * radius)
+                    (current.Z.[i] + (hash01 (seed + 202) - 0.5f) * 2.4f * radius)
+                    (radius * (0.06f + hash01 (seed + 404) * 0.07f))
+                    (baseColor * (0.8f + hash01 (seed + 303) * 0.4f))
 
         if grainInstances > 0 then
             bindShadedProgram grainProgram
@@ -1324,8 +1480,15 @@ void main()
     /// creates a fresh renderer against the new soil state.
     interface IDisposable with
         member _.Dispose() =
-            for program in [| terrainProgram; clodProgram; solidProgram; grainProgram; skyProgram; depthProgram; waterProgram |] do
+            for program in
+                [| terrainProgram; clodProgram; solidProgram; partProgram; grainProgram; skyProgram; depthProgram; waterProgram |] do
                 gl.DeleteProgram program
+
+            for meshes in partMeshes.Values do
+                for struct (vao, vbo, ibo, _) in meshes do
+                    gl.DeleteVertexArray vao
+                    gl.DeleteBuffer vbo
+                    gl.DeleteBuffer ibo
 
             for tile in 0 .. tileCount - 1 do
                 gl.DeleteVertexArray tileVaos.[tile]
@@ -1347,6 +1510,9 @@ void main()
             gl.DeleteVertexArray cylinderVao
             gl.DeleteBuffer cylinderVbo
             gl.DeleteBuffer cylinderIbo
+            gl.DeleteVertexArray coneVao
+            gl.DeleteBuffer coneVbo
+            gl.DeleteBuffer coneIbo
             gl.DeleteVertexArray waterVao
             gl.DeleteBuffer waterVbo
             gl.DeleteBuffer waterIbo

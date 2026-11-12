@@ -93,8 +93,10 @@ void main()
     // Two scales of the per-material detail texture (tileable, generated at
     // startup): close detail + a broader octave to break the repeat.
     vec3 detailNear = texture(detailTextures, vec3(vWorld.xz * 0.9, vLayer)).rgb;
-    vec3 detailFar = texture(detailTextures, vec3(vWorld.xz * 0.13, vLayer)).rgb;
-    vec3 detail = detailNear * detailFar * 4.0;
+    // The broad octave samples a blurred mip: it adds patchiness, not a
+    // magnified copy of the pattern (which tiled into mazes and swirls).
+    vec3 detailFar = texture(detailTextures, vec3(vWorld.xz * 0.11, vLayer), 5.0).rgb;
+    vec3 detail = detailNear * mix(vec3(0.5), detailFar, 0.45) * 4.0;
     fragColor = vec4(shade(vColor * detail, vNormal, vWorld, 0.0), 1.0);
 }
 """
@@ -117,6 +119,30 @@ void main()
     vec4 world = model * vec4(position, 1.0);
     vNormal = mat3(model) * normal;
     vColor = solidColor;
+    vWorld = world.xyz;
+    gl_Position = viewProjection * world;
+}
+"""
+
+    /// Baked machine parts: per-vertex paint color.
+    let partVertex =
+        """#version 410 core
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 normal;
+layout(location = 2) in vec3 color;
+
+uniform mat4 viewProjection;
+uniform mat4 model;
+
+out vec3 vNormal;
+out vec3 vColor;
+out vec3 vWorld;
+
+void main()
+{
+    vec4 world = model * vec4(position, 1.0);
+    vNormal = mat3(model) * normal;
+    vColor = color;
     vWorld = world.xyz;
     gl_Position = viewProjection * world;
 }
@@ -266,9 +292,11 @@ out vec3 vWorld;
 
 void main()
 {
-    // Hash-deform per vertex per instance: clods, not marbles.
-    float wobble = fract(sin(dot(position.xy + instance.xz, vec2(12.9898, 78.233))) * 43758.5453);
-    vec3 local = position * instance.w * mix(0.8, 1.15, wobble);
+    // Hash-deform per vertex per instance: clods, not marbles — lumpy,
+    // and squashed as if they had slumped under their own weight.
+    float wobble = fract(sin(dot(position.xy * 3.1 + position.zz + instance.xz, vec2(12.9898, 78.233))) * 43758.5453);
+    float squash = 0.62 + 0.3 * fract(sin(dot(instance.xz, vec2(41.3, 17.7))) * 9631.7);
+    vec3 local = position * vec3(1.0, squash, 1.0) * instance.w * mix(0.7, 1.2, wobble);
     vec3 world = instance.xyz + local;
     vNormal = normalize(position);
     vColor = instanceColor;

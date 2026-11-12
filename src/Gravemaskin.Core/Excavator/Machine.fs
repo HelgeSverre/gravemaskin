@@ -9,7 +9,7 @@ open BepuPhysics.Constraints
 /// bucket) joined by hinges whose AngularAxisMotors are retuned every tick
 /// from the hydraulic model. Nothing is animated — stalls, sag, self-lift,
 /// and tipping all emerge from force caps and gravity.
-type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
+type Machine(physics: Physics, rig: MachineRig, origin: Vector3, yaw: float32) =
     let simulation = physics.Simulation
     let scale = rig.Scale
     let massChassis, massHouse, massBoom, massStick, massBucket = rig.Masses
@@ -97,6 +97,38 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
 
         Bepu.addAngularMotor simulation stick bucket Vector3.UnitZ
 
+    // Heading: everything above assembles along +X at identity (the
+    // constraints' local frames depend on it), then the finished rig is
+    // turned about the spawn point as one piece.
+    do
+        if yaw <> 0.0f then
+            let rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitY, yaw)
+
+            for handle in [| chassis; house; boom; stick; bucket |] do
+                let mutable bodyRef = simulation.Bodies.[handle]
+                bodyRef.Pose.Position <- origin + Vector3.Transform(bodyRef.Pose.Position - origin, rotation)
+                bodyRef.Pose.Orientation <- rotation
+
+    // Blade cut geometry, derived from the rig's size: the bowl radius
+    // grows by √scale, the lip linearly, so a wide bucket cuts at several
+    // overlapping points along its lip instead of one fat sphere.
+    let cutRadius = Tuning.CutRadius * MathF.Sqrt scale
+    let cutWidth = Tuning.CutWidth * scale
+
+    let cutPoints =
+        if cutWidth * 0.5f <= cutRadius * 1.05f then
+            1
+        else
+            int (MathF.Ceiling(cutWidth / (2.0f * cutRadius)))
+
+    /// Lateral offset of the outermost cut centers from the lip's middle.
+    let cutSpan = if cutPoints = 1 then 0.0f else cutWidth * 0.5f - cutRadius
+
+    let trackPointX =
+        [| -Tuning.TrackPointSpacing; 0.0f; Tuning.TrackPointSpacing |]
+
+    let mutable trackSlipping = false
+
     // ---- per-tick state (all preallocated; the tick path allocates nothing) ----
     let laggedAxes = Array.zeroCreate<float32> Hydraulics.FunctionCount
     // boom, stick, bucket, swing, trackL, trackR — clamped to the spec's
@@ -160,6 +192,8 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
                 { TargetVelocity = velocity
                   MaxForce = cap }
 
+    new(physics: Physics, rig: MachineRig, origin: Vector3) = Machine(physics, rig, origin, 0.0f)
+
     member _.Chassis = chassis
     member _.House = house
     member _.Boom = boom
@@ -177,6 +211,25 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
         MathF.Acos(Math.Clamp(Vector3.Dot(up, Vector3.UnitY), -1.0f, 1.0f))
 
     member _.Rig = rig
+
+    /// Chassis heading about world Y (rad), as passed to the constructor.
+    member _.Yaw =
+        let forward = Vector3.Transform(Vector3.UnitX, simulation.Bodies.[chassis].Pose.Orientation)
+        MathF.Atan2(-forward.Z, forward.X)
+
+    /// World direction along the cutting lip (the bucket's width axis).
+    member _.LipAxis =
+        Vector3.Transform(Vector3.UnitZ, simulation.Bodies.[bucket].Pose.Orientation)
+
+    member _.CutRadius = cutRadius
+    member _.CutWidth = cutWidth
+    member _.CutPoints = cutPoints
+    member _.CutSpan = cutSpan
+    member _.CutMaxDepth = Tuning.CutMaxDepth * MathF.Sqrt scale
+
+    /// True while a driven track is spinning well ahead of (or behind) the
+    /// ground it is on — traction lost.
+    member _.TrackSlipping = trackSlipping
 
     member _.BucketTipPosition =
         let bucketRef = simulation.Bodies.[bucket]
@@ -212,18 +265,24 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
     member _.TrackAxis(side: int) =
         laggedAxes.[if side = 0 then Hydraulics.TrackL else Hydraulics.TrackR]
 
-    /// World-space point under a track's centerline.
-    member _.TrackContactPoint(side: int) =
+    /// World-space point under a track: `point` 0..2 = rear, middle, front.
+    member _.TrackContactPointAt(side: int, point: int) =
         let pose = simulation.Bodies.[chassis].Pose
 
         let offsetLocal =
-            Vector3(0.0f, -0.25f, (if side = 0 then -0.55f else 0.55f)) * scale
+            Vector3(trackPointX.[point], -0.25f, (if side = 0 then -0.55f else 0.55f)) * scale
 
         pose.Position + Vector3.Transform(offsetLocal, pose.Orientation)
+
+    /// World-space point under a track's centerline.
+    member this.TrackContactPoint(side: int) = this.TrackContactPointAt(side, 1)
 
     /// Granted flow scale for a function this tick (1 = full speed): the
     /// flow-sharing observable, surfaced for tests and the HUD.
     member _.GrantedScale(functionIndex: int) = grantedScale.[functionIndex]
+
+    /// Pump circuit a function draws from (clamped to the rig's pump count).
+    member _.CircuitOf(functionIndex: int) = circuitOf.[functionIndex]
 
     /// Payload in the bucket, kg per material (the load scalar: resting soil
     /// converts to bucket mass ASAP — it costs no clump budget and routes
@@ -251,22 +310,43 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
                 bucketLoad.[materialIndex] <- bucketLoad.[materialIndex] + taken
                 taken
 
-    /// Pour out one tick's worth of load if the bucket is open enough.
-    /// Returns (kg, materialIndex) released, or ValueNone.
-    member this.DumpTick() =
-        if this.BucketAngle > rig.DumpAngle && Array.sum bucketLoad > 1e-6 then
-            // Release the heaviest material first (close enough to pouring).
-            let mutable best = 0
+    /// Fraction of a full load the bowl can hold at its current world
+    /// tilt: 1 with the mouth up, 0 once it faces down past PourEmptyTilt.
+    member this.Retention =
+        Math.Clamp(
+            (this.MouthDirection.Y - Tuning.PourEmptyTilt)
+            / (Tuning.PourFullTilt - Tuning.PourEmptyTilt),
+            0.0f,
+            1.0f
+        )
 
-            for i in 1 .. MaterialCount - 1 do
-                if bucketLoad.[i] > bucketLoad.[best] then
-                    best <- i
+    /// Spill one tick's worth of whatever the bowl can no longer hold at
+    /// its tilt. `held` = the teeth are in the ground, where the bank keeps
+    /// the load in. Returns (kg, materialIndex) released, or ValueNone.
+    member this.PourTick(held: bool) =
+        let total = Array.sum bucketLoad
 
-            let released = min rig.DumpRatePerTick bucketLoad.[best]
-            bucketLoad.[best] <- bucketLoad.[best] - released
-            ValueSome(struct (released, best))
-        else
+        if held || total <= 1e-6 then
             ValueNone
+        else
+            let retention = this.Retention
+            let excess = total - float retention * rig.BucketCapacityKg
+
+            if excess <= 1e-6 then
+                ValueNone
+            else
+                // Release the heaviest material first (close enough to pouring).
+                let mutable best = 0
+
+                for i in 1 .. MaterialCount - 1 do
+                    if bucketLoad.[i] > bucketLoad.[best] then
+                        best <- i
+
+                // A tipping bowl dribbles; an upended one dumps.
+                let rate = rig.DumpRatePerTick * float (0.3f + 0.7f * (1.0f - retention))
+                let released = min (min rate excess) bucketLoad.[best]
+                bucketLoad.[best] <- bucketLoad.[best] - released
+                ValueSome(struct (released, best))
 
     /// Push the payload mass into the bucket body's inertia (change-guarded).
     member _.RefreshLoadInertia() =
@@ -334,6 +414,20 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
         laggedAxes.[Hydraulics.Swing] <-
             Hydraulics.lag laggedAxes.[Hydraulics.Swing] (Hydraulics.shapeAxis input.Swing) dt
 
+        // A resting machine goes to sleep; a lever must wake it (BEPU does
+        // not wake a body for a motor-target change, so a sleeping machine
+        // ignored the arm and swing entirely).
+        if
+            MathF.Abs input.Boom > 0.02f
+            || MathF.Abs input.Stick > 0.02f
+            || MathF.Abs input.Bucket > 0.02f
+            || MathF.Abs input.Swing > 0.02f
+        then
+            let mutable chassisWake = physics.Simulation.Bodies.[chassis]
+
+            if not chassisWake.Awake then
+                chassisWake.Awake <- true
+
         laggedAxes.[Hydraulics.TrackL] <-
             Hydraulics.lag laggedAxes.[Hydraulics.TrackL] (Hydraulics.shapeAxis input.LeftTrack) dt
 
@@ -391,63 +485,78 @@ type Machine(physics: Physics, rig: MachineRig, origin: Vector3) =
             (swingAxis * rig.SwingMaxVel * grantedScale.[Hydraulics.Swing])
             rig.SwingTorque
 
-        // 5. Tracks: velocity-servo tractive impulses at each track's ground
-        // contact (Phase 0 verdict: BEPU has no conveyor surface velocity, so
-        // drive is applied in Step, capped at the tractive limit).
+        // 5. Tracks: velocity-servo tractive impulses at three ground
+        // contact points per track (Phase 0 verdict: BEPU has no conveyor
+        // surface velocity, so drive is applied in Step, capped at the
+        // tractive limit). Each point carries a third of the track's gain
+        // and force cap and only works while it is on the ground, so a
+        // machine jacked up on its arm loses the traction it lifted.
         let mutable chassisRef = simulation.Bodies.[chassis]
         let pose = chassisRef.Pose
         let forward = Vector3.Transform(Vector3.UnitX, pose.Orientation)
+        let up = Vector3.Transform(Vector3.UnitY, pose.Orientation)
         let forwardFlat = Vector3.Normalize(Vector3(forward.X, 0.0f, forward.Z))
+        let lateral = Vector3.Cross(Vector3.UnitY, forwardFlat)
+        trackSlipping <- false
 
-        for side in 0..1 do
-            let axis =
-                laggedAxes.[if side = 0 then Hydraulics.TrackL else Hydraulics.TrackR]
+        // On its side or roof the tracks have nothing to push against.
+        if up.Y > 0.5f then
+            for side in 0..1 do
+                let axisIndex = if side = 0 then Hydraulics.TrackL else Hydraulics.TrackR
+                let axis = laggedAxes.[axisIndex]
+                // The valve lag decays forever; below this the lever is home.
+                let driving = MathF.Abs axis > 0.02f
 
-            if MathF.Abs axis > 0.0f then
-                let lateral = Vector3.Cross(Vector3.UnitY, forwardFlat)
-                let offsetLocal =
-                    Vector3(0.0f, -0.25f, (if side = 0 then -0.55f else 0.55f)) * scale
-                let offsetWorld = Vector3.Transform(offsetLocal, pose.Orientation)
-                let contact = pose.Position + offsetWorld
-                let ground = surfaceHeight contact.X contact.Z
-
-                // Only drive when that track is actually near the ground.
-                if contact.Y - ground < 0.35f * scale then
-                    if not chassisRef.Awake then
-                        chassisRef.Awake <- true
-
-                    let velocity = chassisRef.Velocity.Linear
-                    let angular = chassisRef.Velocity.Angular
-                    let pointVelocity = velocity + Vector3.Cross(angular, offsetWorld)
-                    let currentSpeed = Vector3.Dot(pointVelocity, forwardFlat)
-
+                // Lever home = travel brakes on: the same servo, target 0.
+                // It never WAKES the machine (an idle rig must sleep).
+                if driving || chassisRef.Awake then
                     let target =
-                        axis * rig.TrackMaxSpeed * grantedScale.[if side = 0 then 4 else 5]
+                        if driving then
+                            axis * rig.TrackMaxSpeed * grantedScale.[axisIndex]
+                        else
+                            0.0f
 
-                    let force =
-                        Math.Clamp(
-                            (target - currentSpeed) * rig.TrackGain,
-                            -rig.TrackMaxForce,
-                            rig.TrackMaxForce
-                        )
+                    for point in 0..2 do
+                        let offsetLocal =
+                            Vector3(trackPointX.[point], -0.25f, (if side = 0 then -0.55f else 0.55f))
+                            * scale
 
-                    let impulse = forwardFlat * (force * dt)
-                    chassisRef.ApplyImpulse(impulse, offsetWorld)
+                        let offsetWorld = Vector3.Transform(offsetLocal, pose.Orientation)
+                        let contact = pose.Position + offsetWorld
+                        let ground = surfaceHeight contact.X contact.Z
 
-                    // Lateral slip damping at the same point. Capped at HALF
-                    // the tractive limit: this models skid resistance, and
-                    // at full strength it locked rotation — a pivot turn IS
-                    // deliberate lateral skidding at both tracks.
-                    let lateralSpeed = Vector3.Dot(pointVelocity, lateral)
+                        // Only drive where that stretch of track is on the ground.
+                        if contact.Y - ground < 0.35f * scale then
+                            if driving && not chassisRef.Awake then
+                                chassisRef.Awake <- true
 
-                    let lateralForce =
-                        Math.Clamp(
-                            -lateralSpeed * rig.TrackGain,
-                            -rig.TrackMaxForce * 0.5f,
-                            rig.TrackMaxForce * 0.5f
-                        )
+                            let pointVelocity =
+                                chassisRef.Velocity.Linear
+                                + Vector3.Cross(chassisRef.Velocity.Angular, offsetWorld)
 
-                    chassisRef.ApplyImpulse(lateral * (lateralForce * dt), offsetWorld)
+                            // Along the track itself, so the push follows
+                            // the slope the machine is standing on.
+                            let currentSpeed = Vector3.Dot(pointVelocity, forward)
+                            let pointCap = rig.TrackMaxForce / 3.0f
+
+                            let force =
+                                Math.Clamp((target - currentSpeed) * rig.TrackGain / 3.0f, -pointCap, pointCap)
+
+                            if driving && MathF.Abs(target - currentSpeed) > 0.6f * rig.TrackMaxSpeed then
+                                trackSlipping <- true
+
+                            chassisRef.ApplyImpulse(forward * (force * dt), offsetWorld)
+
+                            // Lateral slip damping at the same point. Capped at HALF
+                            // the tractive limit: this models skid resistance, and
+                            // at full strength it locked rotation — a pivot turn IS
+                            // deliberate lateral skidding at both tracks.
+                            let lateralSpeed = Vector3.Dot(pointVelocity, lateral)
+
+                            let lateralForce =
+                                Math.Clamp(-lateralSpeed * rig.TrackGain / 3.0f, -pointCap * 0.5f, pointCap * 0.5f)
+
+                            chassisRef.ApplyImpulse(lateral * (lateralForce * dt), offsetWorld)
 
     /// Remove every constraint and body this machine owns. Callers must
     /// fold the payload back into the world FIRST (mass ledger).

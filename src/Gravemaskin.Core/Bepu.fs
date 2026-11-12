@@ -112,6 +112,12 @@ module Bepu =
         let desc = StaticDescription(position, simulation.Shapes.Add(&shape))
         simulation.Statics.Add(&desc)
 
+    /// Upright static cylinder (tree trunks).
+    let addStaticCylinder (simulation: Simulation) (position: Vector3) (radius: float32) (length: float32) =
+        let shape = Cylinder(radius, length)
+        let desc = StaticDescription(position, simulation.Shapes.Add(&shape))
+        simulation.Statics.Add(&desc)
+
     let addDynamicSphere (simulation: Simulation) (position: Vector3) (radius: float32) (mass: float32) =
         let shape = Sphere(radius)
 

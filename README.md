@@ -62,8 +62,10 @@ quit.
 
 ## Status
 
-A 64×64 m sandbox of grass meadows, sand, gravel, wet lowlands, and clay —
-playable and built in the open. macOS, Windows, and Linux.
+A 64×64 m job site — a gravel yard, a staked foundation pit to dig out,
+stockpiles to load from, a knoll, a flooded gravel pit, a creek, spruce and
+boulders — over grass, sand, gravel and clay strata. Playable and built in
+the open. macOS, Windows, and Linux.
 `just run` starts it; F1 toggles a free camera with a terrain-sculpting
 brush; F5/F9 save and load; `--machine 320` brings the big iron; `--demo` runs a scripted dig loop.
 

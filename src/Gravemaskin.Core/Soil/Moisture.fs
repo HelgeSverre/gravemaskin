@@ -59,13 +59,16 @@ module Moisture =
                     let below = state.Moisture.[state.Index(x, y - 1, z)]
                     let current = state.Moisture.[index]
 
-                    if below > current + 24uy then
-                        state.Moisture.[index] <- current + 8uy
+                    // int math: byte arithmetic wraps, which flipped nearly
+                    // saturated cells (≥ 232) back to bone dry.
+                    if int below > int current + 24 then
+                        state.Moisture.[index] <- byte (min 255 (int current + 8))
 
                 // Surface evaporation.
                 let surfaceIndex = state.Index(x, top, z)
 
                 if top >= tableCells && state.Moisture.[surfaceIndex] > 0uy then
-                    state.Moisture.[surfaceIndex] <- state.Moisture.[surfaceIndex] - 4uy
+                    // Saturating: 255 − 4 − 4 … lands on 3, and 3uy − 4uy = 255.
+                    state.Moisture.[surfaceIndex] <- byte (max 0 (int state.Moisture.[surfaceIndex] - 4))
 
         (cursor + ColumnBudget) % columns

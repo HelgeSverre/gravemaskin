@@ -143,8 +143,7 @@ module Domain =
           Scale: float32
           BucketTipRadius: float32
           BucketCapacityKg: float
-          /// Angle past which the payload pours out.
-          DumpAngle: float32
+          /// Peak pour rate (kg/tick) with the mouth facing straight down.
           DumpRatePerTick: float }
 
     /// POD snapshot handed to the shell each tick; the render thread
@@ -178,5 +177,9 @@ type RenderSnapshot(capacity: int) =
     member val PayloadCapacityKg = 1.0f with get, set
     member val PayloadMaterial = 0uy with get, set
     member val RockCount = 0 with get, set
-    member val RockPositions = Array.zeroCreate<Vector3> 64
-    member val RockRadii = Array.zeroCreate<float32> 64
+    member val RockPositions = Array.zeroCreate<Vector3> 128
+    member val RockRadii = Array.zeroCreate<float32> 128
+    /// Trees: base position (Y follows the ground) and height.
+    member val TreeCount = 0 with get, set
+    member val TreePositions = Array.zeroCreate<Vector3> 96
+    member val TreeHeights = Array.zeroCreate<float32> 96

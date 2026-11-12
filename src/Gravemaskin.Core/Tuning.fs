@@ -173,7 +173,6 @@ module Tuning =
           Scale = 1.0f
           BucketTipRadius = 0.7f
           BucketCapacityKg = 70.0
-          DumpAngle = -0.35f
           DumpRatePerTick = 1.2 }
 
     let cat320Rig =
@@ -222,7 +221,6 @@ module Tuning =
           Scale = 2.4f
           BucketTipRadius = 1.5f
           BucketCapacityKg = 1600.0
-          DumpAngle = -0.35f
           DumpRatePerTick = 25.0 }
 
     /// Takeuchi TB216: 1,795 kg, 16.2 kN bucket breakout, 2.39 m dig depth.
@@ -252,9 +250,26 @@ module Tuning =
     /// Low-pass on the dig resistance (per-tick lerp) so force never pops
     /// crossing cell boundaries.
     let FeeSmoothing = 0.25f
-    /// Cutting geometry: effective blade width and carve radius per tick.
+    /// Surcharge: a loaded bucket bulldozes the soil it can no longer
+    /// swallow, so resistance climbs with fill (×1.5 when heaped).
+    let FeeSurchargeFactor = 0.5f
+    /// Cutting geometry for the U17-class bucket (Scale 1): blade width and
+    /// the cut bowl's radius under the edge. Bigger rigs scale the width
+    /// linearly and the bowl by √scale, cutting at several points along
+    /// the lip (see Machine.CutPoints).
     let CutWidth = 0.6f
     let CutRadius = 0.34f  // kerf wider than the shell: teeth + side cutters clear the shell's own footprint
+    /// Deepest bite the U17 bucket takes (m); scales by √rig scale.
+    let CutMaxDepth = 0.6f
+    /// Un-captured cut soil leaves the blade as shovelful clumps of this
+    /// mass (kg, × scale²) rather than one clump per tick.
+    let SpillClumpKg = 3.0
+
+    /// Radius (m, × scale) of the bucket shell's loose-soil plough.
+    let PloughRadius = 0.3f
+
+    /// A pour leaves the lip as packets of at most this mass (kg).
+    let PourPieceKg = 1.5
     /// Minimum edge speed (m/s) that counts as cutting.
     let CutMinSpeed = 0.12f
 
@@ -278,8 +293,17 @@ module Tuning =
     /// Dump release rate (kg per tick) once the bucket opens — ~1 s to
     /// empty the U17's 70 kg, which reads as a pour instead of a dump-valve.
     let DumpRatePerTick = 1.2
-    /// Bucket angle above which the load pours out.
-    let DumpAngle = -0.35f
+    /// Load retention by the mouth's world tilt (Y of its outward normal):
+    /// at/above PourFullTilt (mouth ≥ ~17° above horizontal) the bowl holds
+    /// a full load; at/below PourEmptyTilt it holds nothing. In between the
+    /// excess spills over the lip — gravity, not a joint angle, decides.
+    let PourFullTilt = 0.30f
+    let PourEmptyTilt = -0.20f
+
+    /// Track ground contact: three points along each track (fractions of
+    /// the U17 half-length, × scale). Drive, brake and compaction act at
+    /// each, so a machine with its nose in the air has less traction.
+    let TrackPointSpacing = 0.6f
 
     /// Input shaping (applied inside the sim for determinism):
     /// deadband → power curve → first-order valve lag.

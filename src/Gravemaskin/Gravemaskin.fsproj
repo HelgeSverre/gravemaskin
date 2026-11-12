@@ -10,6 +10,7 @@
     <Compile Include="Hud.fs" />
     <Compile Include="Settings.fs" />
     <Compile Include="Audio.fs" />
+    <Compile Include="MachineMesh.fs" />
     <Compile Include="Renderer.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

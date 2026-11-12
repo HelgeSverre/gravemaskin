@@ -46,6 +46,17 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
     let mutable rockStruckCooldown = 0
     // Rotating column cursor for the budgeted moisture pass.
     let mutable moistureCursor = 0
+    // Cut soil the bucket didn't capture, waiting to leave the blade as a
+    // shovelful clump (kg per material). Mass in flight: counted by the
+    // conservation check alongside clumps and the payload.
+    let spillPending = Array.zeroCreate<float> MaterialCount
+    let mutable spillPosition = Vector3.Zero
+    // Where the spill is thrown (blade motion) and how wide (lip half-span).
+    let mutable spillVelocity = Vector3.Zero
+    let mutable spillSpread = Vector3.Zero
+    // Scenery: trees are static trunks; the shell draws them at ground level.
+    let treePositions = ResizeArray<Vector3>(96)
+    let treeHeights = ResizeArray<float32>(96)
 
     let surfaceHeight (x: float32) (z: float32) =
         match soilState with
@@ -64,6 +75,19 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                 physics.SwapTileMesh(state, tile)
 
             Array.fill state.DirtyMesh 0 state.DirtyMesh.Length false
+
+            // World boundary: the soil mesh simply ends at the map edge, and
+            // a machine driven over it fell forever. Four tall static walls
+            // just outside the volume keep machines, rocks and clumps in.
+            let worldX = float32 state.Config.CellsX * state.Config.CellSize
+            let worldZ = float32 state.Config.CellsZ * state.Config.CellSize
+            let wall (center: Vector3) (size: Vector3) =
+                Bepu.addStaticBox physics.Simulation center size |> ignore
+
+            wall (Vector3(-2.0f, 20.0f, worldZ * 0.5f)) (Vector3(4.0f, 60.0f, worldZ + 8.0f))
+            wall (Vector3(worldX + 2.0f, 20.0f, worldZ * 0.5f)) (Vector3(4.0f, 60.0f, worldZ + 8.0f))
+            wall (Vector3(worldX * 0.5f, 20.0f, -2.0f)) (Vector3(worldX + 8.0f, 60.0f, 4.0f))
+            wall (Vector3(worldX * 0.5f, 20.0f, worldZ + 2.0f)) (Vector3(worldX + 8.0f, 60.0f, 4.0f))
         | None -> ()
 
     /// Collision-mesh swaps allowed per tick once running. Each swap builds
@@ -81,18 +105,15 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
     /// Spawn the excavator with its tracks resting at the surface under
     /// `position` (XZ).
-    member _.SpawnMachine(position: Vector3) =
-        let ground = surfaceHeight position.X position.Z
-        let spawned = Machine(physics, Tuning.u17Rig, Vector3(position.X, ground + 0.01f, position.Z))
-        machine <- Some spawned
-        spawned
+    member this.SpawnMachine(position: Vector3) = this.SpawnMachineRig(Tuning.u17Rig, position)
 
-    /// Swap the machine for another rig at the same spot. The payload is
-    /// deposited on the ground first so the ledger stays exact.
+    /// Swap the machine for another rig at the same spot and heading. The
+    /// payload is deposited on the ground first so the ledger stays exact.
     member this.SwapMachine(rig: MachineRig) =
         match machine with
         | Some m ->
             let position = physics.Simulation.Bodies.[m.Chassis].Pose.Position
+            let yaw = m.Yaw
 
             match soilState with
             | Some state ->
@@ -104,14 +125,21 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
             m.Despawn()
             machine <- None
-            this.SpawnMachineRig(rig, Vector3(position.X, 0.0f, position.Z))
+            this.SpawnMachineRig(rig, Vector3(position.X, 0.0f, position.Z), yaw)
         | None -> this.SpawnMachineRig(rig, Vector3(32.0f, 0.0f, 32.0f))
 
-    member _.SpawnMachineRig(rig: MachineRig, position: Vector3) =
+    member this.SpawnMachineRig(rig: MachineRig, position: Vector3) =
+        this.SpawnMachineRig(rig, position, 0.0f)
+
+    /// Spawn a rig at `position` (XZ) heading `yaw` radians about +Y.
+    member _.SpawnMachineRig(rig: MachineRig, position: Vector3, yaw: float32) =
         let ground = surfaceHeight position.X position.Z
-        let spawned = Machine(physics, rig, Vector3(position.X, ground + 0.01f, position.Z))
+        let spawned = Machine(physics, rig, Vector3(position.X, ground + 0.01f, position.Z), yaw)
         machine <- Some spawned
         spawned
+
+    /// Cut soil waiting on the blade (kg per material) — mass in flight.
+    member _.SpillPending = spillPending
 
     /// Events raised by the most recent Step; consume before stepping again.
     member _.Events: ResizeArray<GameEvent> = events
@@ -133,38 +161,30 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
                     if remaining > 0.0 then
                         let material = Volume.materialOfByte (byte materialIndex)
-                        // ~0.12 m radius clump at loose density.
-                        let props = Tuning.soil material
-
-                        let clumpMass =
-                            float (
-                                Volume.looseDensity props
-                                * (4.0f / 3.0f * System.MathF.PI * 0.12f * 0.12f * 0.12f)
-                            )
+                        let clumpMass = Tuning.SpillClumpKg
 
                         while remaining > 0.0 do
                             let mass = min remaining clumpMass
                             remaining <- remaining - mass
 
-                            let jitter =
-                                Vector3(
-                                    (Rng.nextFloat32 &rng - 0.5f) * radius,
-                                    Rng.nextFloat32 &rng * 0.3f + 0.2f,
-                                    (Rng.nextFloat32 &rng - 0.5f) * radius
-                                )
+                            // The brush throws its spoil up and outward as
+                            // a ring around the cut.
+                            let angle = Rng.nextFloat32 &rng * System.MathF.Tau
+                            let reach = 0.4f + Rng.nextFloat32 &rng * 0.6f
+                            let outward = Vector3(System.MathF.Cos angle, 0.0f, System.MathF.Sin angle)
 
-                            // Spawn strictly above BOTH surfaces: the new one
-                            // and the stale collision mesh (swap is budgeted,
-                            // so the old surface can persist a few ticks —
-                            // spawning inside it would pop the clump out).
-                            // Carving from above means the sphere top bounds
-                            // the old surface in the carved region.
                             let clearY =
                                 max (Soil.surfaceHeight state center.X center.Z) (center.Y + radius)
 
-                            let position = Vector3(center.X, clearY, center.Z) + jitter
+                            let position =
+                                Vector3(center.X, clearY + 0.1f + Rng.nextFloat32 &rng * 0.3f, center.Z)
+                                + outward * (radius * 0.5f)
 
-                            if not (clumps.TrySpawn(physics.Simulation, position, mass, material)) then
+                            // Thrown well clear (1.5–3 m): a trench swept
+                            // with the brush must not backfill itself.
+                            let velocity = outward * (3.0f + reach * 3.0f) + Vector3(0.0f, 3.0f, 0.0f)
+
+                            if not (clumps.TrySpawn(position, velocity, mass, material)) then
                                 // Cap overflow: bank it immediately, mass-neutral.
                                 Soil.deposit state position mass material
 
@@ -174,53 +194,106 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
     member private _.SpawnClump(position: Vector3, velocity: Vector3, mass: float, material: SoilMaterial) =
         match soilState with
         | Some state ->
-            if clumps.TrySpawn(physics.Simulation, position, mass, material) then
-                // Give it the bucket's velocity so pours look like pours.
-                let handle = clumps.Handles.[clumps.Count - 1]
-                let mutable bodyRef = physics.Simulation.Bodies.[handle]
-                bodyRef.Velocity.Linear <- velocity
-            else
+            if not (clumps.TrySpawn(position, velocity, mass, material)) then
                 Soil.deposit state position mass material
         | None -> ()
 
-    /// The dig system: bucket cutting edge vs the soil volume. Carve where
-    /// the moving edge is below the surface, absorb into the payload, resist
-    /// via FEE, pour out when the bucket opens.
+    /// Turn pending spill into clumps at the blade: whole shovelfuls while
+    /// cutting, everything that's left once the cut stops.
+    member private this.FlushSpill(state: SoilState, pieceMass: float, everything: bool) =
+        for materialIndex in 0 .. MaterialCount - 1 do
+            let mutable pending = spillPending.[materialIndex]
+
+            if pending > 0.0 then
+                let material = Volume.materialOfByte (byte materialIndex)
+
+                while pending >= pieceMass do
+                    pending <- pending - pieceMass
+
+                    // Spread along the lip and fan a little, so the spoil
+                    // lands as a windrow ahead of the blade.
+                    let across = (Rng.nextFloat32 &rng - 0.5f) * 2.0f
+
+                    let scatter =
+                        Vector3(
+                            (Rng.nextFloat32 &rng - 0.5f) * 0.5f,
+                            Rng.nextFloat32 &rng * 0.4f,
+                            (Rng.nextFloat32 &rng - 0.5f) * 0.5f
+                        )
+
+                    this.SpawnClump(
+                        spillPosition + spillSpread * across + Vector3(0.0f, Rng.nextFloat32 &rng * 0.15f, 0.0f),
+                        spillVelocity + scatter,
+                        pieceMass,
+                        material
+                    )
+
+                if everything && pending > 0.0 then
+                    // Sub-clump leftovers bank in the residual rather than
+                    // vanishing (the only path that ever leaked mass).
+                    if pending > 0.001 then
+                        this.SpawnClump(spillPosition, spillVelocity, pending, material)
+                    else
+                        Soil.creditUnbanked state materialIndex pending
+
+                    pending <- 0.0
+
+                spillPending.[materialIndex] <- pending
+
+    /// The dig system: bucket cutting edge vs the soil volume. Cut what the
+    /// moving lip sweeps, absorb into the payload, resist via FEE, spill
+    /// whatever the bowl can't hold at its tilt.
     member private this.DigTick() =
         match machine, soilState with
         | Some m, Some state ->
+            let scale = m.Rig.Scale
             let edge = m.BucketTipPosition
             let edgeVelocity = m.CuttingEdgeVelocity
             let surface = Soil.surfaceHeight state edge.X edge.Z
+            let horizontal = Vector3(edgeVelocity.X, 0.0f, edgeVelocity.Z)
+            let moving = horizontal.LengthSquared() > 1e-4f
+            let heading = if moving then Vector3.Normalize horizontal else Vector3.Zero
 
             // Cut depth is measured against the BENCH AHEAD of the edge,
             // not the pothole the edge just carved under itself — the face
             // being sheared is what resists (and what the teeth attack).
-            let depth =
-                let horizontal = Vector3(edgeVelocity.X, 0.0f, edgeVelocity.Z)
+            let ahead = edge + heading * (0.3f * scale)
 
-                if horizontal.LengthSquared() > 1e-4f then
-                    let ahead = edge + Vector3.Normalize horizontal * 0.3f
-                    max (surface - edge.Y) (Soil.surfaceHeight state ahead.X ahead.Z - edge.Y)
-                else
-                    surface - edge.Y
+            let surfaceAhead =
+                if moving then Soil.surfaceHeight state ahead.X ahead.Z else surface
 
+            let depth = max surface surfaceAhead - edge.Y
             let speed = edgeVelocity.Length()
             let mutable targetForce = Vector3.Zero
+            let capacity = m.Rig.BucketCapacityKg
+            // Per-tick masses are tuned for the U17's 70 kg bucket.
+            let loadScale = capacity / Tuning.BucketCapacityKg
+            let pieceMass = Tuning.SpillClumpKg * float (scale * scale)
+            let cutting = depth > 0.02f && speed > Tuning.CutMinSpeed
 
-            if depth > 0.02f && speed > Tuning.CutMinSpeed then
-                // Peek the material where the edge cuts (for FEE), then carve.
-                let config = state.Config
-                let cx = int (edge.X / config.CellSize) |> max 0 |> min (config.CellsX - 1)
-                let cz = int (edge.Z / config.CellSize) |> max 0 |> min (config.CellsZ - 1)
-                let cy = int (edge.Y / config.CellSize) |> max 0 |> min (config.CellsY - 1)
-                let index = state.Index(cx, cy, cz)
-                let matByte = state.Material.[index]
-                let compByte = state.Compaction.[index]
-                let moistByte = state.Moisture.[index]
+            if cutting then
+                // The soil being sheared: sampled in the bench, not in the
+                // cell at the edge (which the last tick's cut emptied).
+                let bench = if surfaceAhead > surface then ahead else edge
+
+                let struct (matByte, compByte, moistByte) =
+                    Soil.sampleBelow state bench.X edge.Y bench.Z
+
                 let props = Tuning.soil (Volume.materialOfByte matByte)
 
-                let removed = Soil.carveSphere state edge Tuning.CutRadius carveScratch
+                // Swept cut across the lip's width.
+                Array.fill carveScratch 0 MaterialCount 0.0
+                let lip = m.LipAxis
+                let mutable removed = 0.0
+
+                for i in 0 .. m.CutPoints - 1 do
+                    let t =
+                        if m.CutPoints = 1 then
+                            0.0f
+                        else
+                            float32 i / float32 (m.CutPoints - 1) * 2.0f - 1.0f
+
+                    removed <- removed + Soil.carveBowl state (edge + lip * (t * m.CutSpan)) m.CutRadius carveScratch
 
                 // Mouth gate: soil shears over the lip into the bowl only
                 // when the open face leads the motion (a curl-through cut).
@@ -232,10 +305,22 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
                 // Soil shears over the lip at a finite rate; one budget
                 // across all materials per tick.
-                let mutable fillBudget = if mouthLeads then Tuning.BucketFillPerTick else 0.0
+                let mutable fillBudget =
+                    if mouthLeads then Tuning.BucketFillPerTick * loadScale else 0.0
 
                 if removed > 0.0 then
                     events.Add DigStarted
+
+                    // Un-captured carve gets PUSHED AHEAD of the cut (the
+                    // blade's push-mound), not dropped back into it: loose
+                    // clumps leave the blade displaced along its motion so
+                    // berms build on uncut ground.
+                    spillPosition <-
+                        Vector3(edge.X, max surface (edge.Y + m.CutRadius) + 0.3f, edge.Z)
+                        + heading * (0.5f * scale)
+
+                    spillVelocity <- heading * System.MathF.Min(speed, 1.5f) + Vector3(0.0f, 0.3f, 0.0f)
+                    spillSpread <- lip * m.CutSpan
 
                     for materialIndex in 0 .. MaterialCount - 1 do
                         if carveScratch.[materialIndex] > 0.0 then
@@ -249,48 +334,20 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                                 else
                                     0.0
 
-                            let spill = carveScratch.[materialIndex] - absorbed
+                            spillPending.[materialIndex] <-
+                                spillPending.[materialIndex] + carveScratch.[materialIndex] - absorbed
 
-                            // Sub-clump spill still exists: bank it in the
-                            // residual rather than destroying it (the only
-                            // path that ever leaked mass — review finding).
-                            if spill > 0.0 && spill <= 0.001 then
-                                Soil.creditUnbanked state materialIndex spill
+                // FEE resistance opposing the cut direction, plus the
+                // surcharge of the heap a filling bucket pushes ahead.
+                let fill = float32 (m.BucketLoadKg / capacity)
 
-                            if spill > 0.001 then
-                                // Un-captured carve gets PUSHED AHEAD of
-                                // the cut (the blade's push-mound), not
-                                // dropped back into it: spawn the loose
-                                // clumps displaced along the edge's motion
-                                // so berms build on uncut ground.
-                                let pushAhead =
-                                    let horizontal = Vector3(edgeVelocity.X, 0.0f, edgeVelocity.Z)
+                let magnitude =
+                    Fee.resistanceAt m.CutMaxDepth props compByte moistByte depth m.CutWidth
+                    * (1.0f + Tuning.FeeSurchargeFactor * fill)
 
-                                    if horizontal.LengthSquared() > 1e-4f then
-                                        Vector3.Normalize horizontal * 0.5f
-                                    else
-                                        Vector3.Zero
-
-                                let jitter =
-                                    Vector3(
-                                        (Rng.nextFloat32 &rng - 0.5f) * 0.4f,
-                                        0.3f + Rng.nextFloat32 &rng * 0.2f,
-                                        (Rng.nextFloat32 &rng - 0.5f) * 0.4f
-                                    )
-
-                                this.SpawnClump(
-                                    Vector3(edge.X, max surface (edge.Y + Tuning.CutRadius), edge.Z)
-                                    + pushAhead
-                                    + jitter,
-                                    Vector3.Zero,
-                                    spill,
-                                    Volume.materialOfByte (byte materialIndex)
-                                )
-
-                // FEE resistance opposing the cut direction.
-                let magnitude = Fee.resistance props compByte moistByte depth Tuning.CutWidth
                 targetForce <- -Vector3.Normalize edgeVelocity * magnitude
 
+            this.FlushSpill(state, pieceMass, not cutting)
             feeForce <- Vector3.Lerp(feeForce, targetForce, Tuning.FeeSmoothing)
 
             if feeForce.LengthSquared() > 1.0f then
@@ -301,32 +358,58 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
                 bucketRef.ApplyImpulse(feeForce * Tuning.FixedDt, edge - bucketRef.Pose.Position)
 
-            // Scoop: loose clumps cradled inside a well-curled bucket
-            // convert to payload (the training-sim trick — clump budget
-            // freed, weight still on the linkage).
-            if m.BucketAngle < -1.0f then
-                let bucketCenter = physics.Simulation.Bodies.[m.Bucket].Pose.Position
-                let mouthRadius = 0.45f * m.Rig.Scale
-                let mutable i = 0
+            // The shell ploughs loose spoil: a berm or dumped pile is not a
+            // wall. Whatever loose soil the bucket body overlaps is pushed
+            // off ahead of its motion — so the bucket can sweep, grade and
+            // backfill, and never jams against its own windrow.
+            let bucketBody = physics.Simulation.Bodies.[m.Bucket]
+            let bodyCenter = bucketBody.Pose.Position
+            let ploughRadius = Tuning.PloughRadius * scale
+            Array.fill carveScratch 0 MaterialCount 0.0
+            let mutable ploughed = 0.0
 
-                while i < clumps.Count do
-                    let clumpPosition = physics.Simulation.Bodies.[clumps.Handles.[i]].Pose.Position
+            for i in -1..1 do
+                ploughed <-
+                    ploughed
+                    + Soil.ploughLoose
+                        state
+                        (bodyCenter + m.LipAxis * (float32 i * 0.2f * scale))
+                        ploughRadius
+                        carveScratch
 
-                    if Vector3.DistanceSquared(clumpPosition, bucketCenter) < mouthRadius * mouthRadius then
-                        let taken = m.TryAbsorb(clumps.Masses.[i], int clumps.Materials.[i])
+            if ploughed > 0.0 then
+                let push = Vector3(bucketBody.Velocity.Linear.X, 0.0f, bucketBody.Velocity.Linear.Z)
 
-                        if taken >= clumps.Masses.[i] - 1e-9 then
-                            clumps.RemoveAt(physics.Simulation, i)
-                        else
-                            // No room: leave it be (partial absorb would
-                            // need a mass edit on a live body).
-                            m.TryAbsorb(-taken, int clumps.Materials.[i]) |> ignore
-                            i <- i + 1
+                let direction =
+                    if push.LengthSquared() > 0.01f then
+                        Vector3.Normalize push
                     else
-                        i <- i + 1
+                        let angle = Rng.nextFloat32 &rng * System.MathF.Tau
+                        Vector3(System.MathF.Cos angle, 0.0f, System.MathF.Sin angle)
 
-            // Pour the payload out of an open bucket.
-            match m.DumpTick() with
+                for materialIndex in 0 .. MaterialCount - 1 do
+                    let mutable left = carveScratch.[materialIndex]
+
+                    while left > 0.0 do
+                        let piece = min left Tuning.SpillClumpKg
+                        left <- left - piece
+                        let across = (Rng.nextFloat32 &rng - 0.5f) * 0.6f * scale
+
+                        this.SpawnClump(
+                            bodyCenter
+                            + direction * (ploughRadius + 0.2f)
+                            + m.LipAxis * across
+                            + Vector3(0.0f, 0.1f + Rng.nextFloat32 &rng * 0.15f, 0.0f),
+                            direction * (System.MathF.Min(push.Length(), 2.0f) + 0.6f)
+                            + Vector3(0.0f, 0.5f, 0.0f),
+                            piece,
+                            Volume.materialOfByte (byte materialIndex)
+                        )
+
+            // Gravity empties the bowl: whatever it can't hold at its
+            // current tilt runs out over the lip — unless the teeth are
+            // below the bench, where the bank itself keeps the load in.
+            match m.PourTick(depth > 0.02f) with
             | ValueSome(released, materialIndex) ->
                 events.Add(SoilDumped(float32 released, byte materialIndex))
 
@@ -337,12 +420,32 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                 let pourVelocity =
                     Vector3(bodyVelocity.X, System.MathF.Min(bodyVelocity.Y, 0.2f) - 0.4f, bodyVelocity.Z)
 
-                this.SpawnClump(
-                    edge + Vector3(0.0f, -0.1f, 0.0f),
-                    pourVelocity,
-                    released,
-                    Volume.materialOfByte (byte materialIndex)
-                )
+                // A curtain across the lip, not one lump: several small
+                // packets spread over the bucket's width.
+                let material = Volume.materialOfByte (byte materialIndex)
+                let pieces = int (System.Math.Ceiling(released / Tuning.PourPieceKg)) |> max 1 |> min 8
+                let piece = released / float pieces
+                let lip = m.LipAxis
+                let mutable left = released
+
+                for pieceIndex in 1..pieces do
+                    let mass = if pieceIndex = pieces then left else piece
+                    left <- left - mass
+                    let across = (Rng.nextFloat32 &rng - 0.5f) * 2.0f * m.CutSpan
+
+                    let scatter =
+                        Vector3(
+                            (Rng.nextFloat32 &rng - 0.5f) * 0.35f,
+                            (Rng.nextFloat32 &rng - 0.5f) * 0.3f,
+                            (Rng.nextFloat32 &rng - 0.5f) * 0.35f
+                        )
+
+                    this.SpawnClump(
+                        edge + lip * across + Vector3(0.0f, -0.05f - Rng.nextFloat32 &rng * 0.1f, 0.0f),
+                        pourVelocity + scatter,
+                        mass,
+                        material
+                    )
             | ValueNone -> ()
 
             m.RefreshLoadInertia()
@@ -354,8 +457,9 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
         match machine with
         | Some m ->
             for side in 0..1 do
+              for trackPoint in 0..2 do
                 if System.MathF.Abs(m.TrackAxis side) > 0.15f then
-                    let point = m.TrackContactPoint side
+                    let point = m.TrackContactPointAt(side, trackPoint)
                     let config = state.Config
                     let x = int (point.X / config.CellSize) |> max 0 |> min (config.CellsX - 1)
                     let z = int (point.Z / config.CellSize) |> max 0 |> min (config.CellsZ - 1)
@@ -412,6 +516,62 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
         | None -> ()
 
     member _.Rocks = rockHandles
+
+    /// Plant one tree: a static trunk the machine can't drive through.
+    member _.AddTree(x: float32, z: float32, height: float32) =
+        let ground = surfaceHeight x z
+        // The trunk runs well below grade so it still blocks after the
+        // ground beside it has been dug away.
+        Bepu.addStaticCylinder physics.Simulation (Vector3(x, ground + height * 0.5f - 1.5f, z)) (0.05f * height) (height + 3.0f)
+        |> ignore
+
+        treePositions.Add(Vector3(x, ground, z))
+        treeHeights.Add height
+
+    member _.TreeCount = treePositions.Count
+
+    /// Dress the job site: spruce on the open ground, loose boulders on
+    /// the surface, the site cabin by the yard. No-op without a site.
+    member this.SeedScenery() =
+        match soilState with
+        | Some state when state.Site.IsSome ->
+            let site = state.Site.Value
+
+            for _ in 1..260 do
+                let x = 3.0f + Rng.nextFloat32 &rng * (site.WorldX - 6.0f)
+                let z = 3.0f + Rng.nextFloat32 &rng * (site.WorldZ - 6.0f)
+                let height = 3.2f + Rng.nextFloat32 &rng * 3.0f
+                let struct (matByte, _) = Soil.surfaceSample state x z
+                let material = Volume.materialOfByte matByte
+                let mutable clear = treePositions.Count < 72
+
+                for i in 0 .. treePositions.Count - 1 do
+                    if Vector3.DistanceSquared(Vector3(x, treePositions.[i].Y, z), treePositions.[i]) < 6.5f then
+                        clear <- false
+
+                if
+                    clear
+                    && (material = Grass || material = Topsoil)
+                    && Terrain.isOpenGround site x z
+                    && surfaceHeight x z > state.WaterTableHeight + 0.4f
+                then
+                    this.AddTree(x, z, height)
+
+            for _ in 1..26 do
+                let x = 3.0f + Rng.nextFloat32 &rng * (site.WorldX - 6.0f)
+                let z = 3.0f + Rng.nextFloat32 &rng * (site.WorldZ - 6.0f)
+                let radius = 0.28f + Rng.nextFloat32 &rng * 0.34f
+
+                if Terrain.isOpenGround site x z && rockHandles.Count < 120 then
+                    this.AddRock(Vector3(x, surfaceHeight x z + radius * 0.8f, z), radius, true)
+
+            // Site cabin: a 5 × 2.5 × 2.4 m box on the yard's north side.
+            Bepu.addStaticBox
+                physics.Simulation
+                (Vector3(site.CabinX, site.PadHeight + 1.25f, site.CabinZ))
+                (Vector3(5.0f, 2.5f, 2.4f))
+            |> ignore
+        | _ -> ()
 
     /// Expose rocks the digging uncovers (kinematic → dynamic) and raise
     /// RockStruck when the cutting edge slams one.
@@ -479,9 +639,14 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
         | Some state ->
             // Bank every live clump where it is.
             while clumps.Count > 0 do
-                let position = physics.Simulation.Bodies.[clumps.Handles.[0]].Pose.Position
-                Soil.deposit state position clumps.Masses.[0] (Volume.materialOfByte clumps.Materials.[0])
-                clumps.RemoveAt(physics.Simulation, 0)
+                Soil.deposit state (clumps.Position 0) clumps.Masses.[0] (Volume.materialOfByte clumps.Materials.[0])
+                clumps.RemoveAt 0
+
+            // Soil still on the blade banks where it was cut.
+            for i in 0 .. MaterialCount - 1 do
+                if spillPending.[i] > 0.0 then
+                    Soil.deposit state spillPosition spillPending.[i] (Volume.materialOfByte (byte i))
+                    spillPending.[i] <- 0.0
 
             // Fold the payload out onto the ground under the bucket.
             match machine with
@@ -494,7 +659,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
             use stream = System.IO.File.Create path
             use writer = new System.IO.BinaryWriter(stream)
-            writer.Write "GRAV2"
+            writer.Write "GRAV3"
             writer.Write state.Config.CellSize
             writer.Write state.Config.CellsX
             writer.Write state.Config.CellsY
@@ -533,6 +698,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                 let position = physics.Simulation.Bodies.[m.Chassis].Pose.Position
                 writer.Write position.X
                 writer.Write position.Z
+                writer.Write m.Yaw
             | None -> writer.Write false
 
             writer.Write rockHandles.Count
@@ -544,6 +710,23 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                 writer.Write position.Z
                 writer.Write rockRadii.[i]
                 writer.Write rockExposed.[i]
+
+            writer.Write treePositions.Count
+
+            for i in 0 .. treePositions.Count - 1 do
+                writer.Write treePositions.[i].X
+                writer.Write treePositions.[i].Z
+                writer.Write treeHeights.[i]
+
+            match state.Site with
+            | ValueSome site ->
+                writer.Write true
+
+                for value in
+                    [| site.WorldX; site.WorldZ; site.YardX; site.YardZ; site.PadHeight; site.PitMinX
+                       site.PitMinZ; site.PitMaxX; site.PitMaxZ; site.PitDepth; site.CabinX; site.CabinZ |] do
+                    writer.Write value
+            | ValueNone -> writer.Write false
 
     member this.Step(input: InputFrame) : RenderState =
         events.Clear()
@@ -559,6 +742,9 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
             // parking on ordinary hillsides (10–15°) is not a warning.
             if m.ChassisTilt > 0.38f then
                 events.Add TipWarning
+
+            if m.TrackSlipping then
+                events.Add TrackSlip
         | None -> ()
 
         this.DigTick()
@@ -566,7 +752,7 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
 
         match soilState with
         | Some state ->
-            clumps.SettlePass(physics.Simulation, state)
+            clumps.Step(state, Tuning.FixedDt)
             Soil.settleTick state wallFailures
 
             // Cohesive wedge failures tumble off the face as clumps — split
@@ -579,25 +765,31 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
                     float failure.Units
                     * Volume.massPerOccUnit state.Config failure.MaterialByte failure.CompactionByte
 
-                let position =
-                    Vector3(
-                        (float32 failure.X + 0.5f) * state.Config.CellSize,
-                        state.Heights.[state.ColumnIndex(failure.X, failure.Z)] + 0.35f,
-                        (float32 failure.Z + 0.5f) * state.Config.CellSize
-                    )
+                // The wedge leaves the face over the low side and falls
+                // onto the trench floor as loose spoil.
+                let size = state.Config.CellSize
+                let high = Vector3((float32 failure.X + 0.5f) * size, 0.0f, (float32 failure.Z + 0.5f) * size)
+                let low = Vector3((float32 failure.LowX + 0.5f) * size, 0.0f, (float32 failure.LowZ + 0.5f) * size)
+                let outward = Vector3.Normalize(low - high)
+                let top = state.Heights.[state.ColumnIndex(failure.X, failure.Z)]
 
                 while remaining > 0.0 do
-                    let piece = min remaining 9.0
+                    let piece = min remaining Tuning.SpillClumpKg
                     remaining <- remaining - piece
 
                     let jitter =
                         Vector3(
-                            (Rng.nextFloat32 &rng - 0.5f) * 0.3f,
-                            Rng.nextFloat32 &rng * 0.25f,
-                            (Rng.nextFloat32 &rng - 0.5f) * 0.3f
+                            (Rng.nextFloat32 &rng - 0.5f) * size,
+                            Rng.nextFloat32 &rng * 0.3f,
+                            (Rng.nextFloat32 &rng - 0.5f) * size
                         )
 
-                    this.SpawnClump(position + jitter, Vector3.Zero, piece, Volume.materialOfByte failure.MaterialByte)
+                    this.SpawnClump(
+                        Vector3(low.X, top + 0.05f, low.Z) + jitter,
+                        outward * (0.3f + Rng.nextFloat32 &rng * 0.6f),
+                        piece,
+                        Volume.materialOfByte failure.MaterialByte
+                    )
 
             wallFailures.Clear()
             moistureCursor <- Moisture.tick state state.WaterTableHeight moistureCursor
@@ -620,16 +812,13 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
         snapshot.Count <- count
 
         for i in 0 .. count - 1 do
-            let bodyRef = physics.Simulation.Bodies.[clumps.Handles.[i]]
-            let position = bodyRef.Pose.Position
-            snapshot.Handles.[i] <- clumps.Handles.[i].Value
-            snapshot.X.[i] <- position.X
-            snapshot.Y.[i] <- position.Y
-            snapshot.Z.[i] <- position.Z
-            let velocity = bodyRef.Velocity.Linear
-            snapshot.VelocityX.[i] <- velocity.X
-            snapshot.VelocityY.[i] <- velocity.Y
-            snapshot.VelocityZ.[i] <- velocity.Z
+            snapshot.Handles.[i] <- clumps.Ids.[i]
+            snapshot.X.[i] <- clumps.PositionsX.[i]
+            snapshot.Y.[i] <- clumps.PositionsY.[i]
+            snapshot.Z.[i] <- clumps.PositionsZ.[i]
+            snapshot.VelocityX.[i] <- clumps.VelocitiesX.[i]
+            snapshot.VelocityY.[i] <- clumps.VelocitiesY.[i]
+            snapshot.VelocityZ.[i] <- clumps.VelocitiesZ.[i]
             snapshot.Materials.[i] <- clumps.Materials.[i]
 
             let props = Tuning.soil (Volume.materialOfByte clumps.Materials.[i])
@@ -650,6 +839,16 @@ type World(seed: uint64, threadCount: int, soil: SoilSetup option) =
         for i in 0 .. rockCount - 1 do
             snapshot.RockPositions.[i] <- physics.Simulation.Bodies.[rockHandles.[i]].Pose.Position
             snapshot.RockRadii.[i] <- rockRadii.[i]
+
+        // Trees ride the ground they stand on (dig beside one and it sinks
+        // with the bank rather than hovering).
+        let treeCount = min treePositions.Count snapshot.TreePositions.Length
+        snapshot.TreeCount <- treeCount
+
+        for i in 0 .. treeCount - 1 do
+            let position = treePositions.[i]
+            snapshot.TreePositions.[i] <- Vector3(position.X, surfaceHeight position.X position.Z, position.Z)
+            snapshot.TreeHeights.[i] <- treeHeights.[i]
 
     interface System.IDisposable with
         member _.Dispose() = (physics :> System.IDisposable).Dispose()
@@ -691,8 +890,12 @@ module Sim =
         use stream = System.IO.File.OpenRead path
         use reader = new System.IO.BinaryReader(stream)
 
-        if reader.ReadString() <> "GRAV2" then
-            failwith "not a Gravemaskin save"
+        // GRAV2 saves predate heading, trees and the site layout.
+        let version =
+            match reader.ReadString() with
+            | "GRAV3" -> 3
+            | "GRAV2" -> 2
+            | _ -> failwith "not a Gravemaskin save"
 
         let config =
             { CellSize = reader.ReadSingle()
@@ -737,7 +940,10 @@ module Sim =
             let name = reader.ReadString()
             let x = reader.ReadSingle()
             let z = reader.ReadSingle()
-            world.SpawnMachineRig(Tuning.rigByName name, System.Numerics.Vector3(x, 0.0f, z)) |> ignore
+            let yaw = if version >= 3 then reader.ReadSingle() else 0.0f
+
+            world.SpawnMachineRig(Tuning.rigByName name, System.Numerics.Vector3(x, 0.0f, z), yaw)
+            |> ignore
 
         let rockCount = reader.ReadInt32()
 
@@ -748,5 +954,38 @@ module Sim =
             let radius = reader.ReadSingle()
             let exposed = reader.ReadBoolean()
             world.AddRock(System.Numerics.Vector3(x, y, z), radius, exposed)
+
+        if version >= 3 then
+            let treeCount = reader.ReadInt32()
+
+            for _ in 1..treeCount do
+                let x = reader.ReadSingle()
+                let z = reader.ReadSingle()
+                world.AddTree(x, z, reader.ReadSingle())
+
+            if reader.ReadBoolean() then
+                let read () = reader.ReadSingle()
+
+                let site =
+                    { WorldX = read ()
+                      WorldZ = read ()
+                      YardX = read ()
+                      YardZ = read ()
+                      PadHeight = read ()
+                      PitMinX = read ()
+                      PitMinZ = read ()
+                      PitMaxX = read ()
+                      PitMaxZ = read ()
+                      PitDepth = read ()
+                      CabinX = read ()
+                      CabinZ = read () }
+
+                state.Site <- ValueSome site
+
+                Bepu.addStaticBox
+                    world.Physics.Simulation
+                    (System.Numerics.Vector3(site.CabinX, site.PadHeight + 1.25f, site.CabinZ))
+                    (System.Numerics.Vector3(5.0f, 2.5f, 2.4f))
+                |> ignore
 
         world

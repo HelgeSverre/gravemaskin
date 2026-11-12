@@ -13,9 +13,17 @@ open System.Numerics
 module Fee =
 
     /// Resistance magnitude (N) for a cut of depth `d` (m) with blade width
-    /// `w` (m) in the given material.
-    let resistance (props: SoilProperties) (compaction: byte) (moisture: byte) (depth: float32) (width: float32) =
-        let d = Math.Clamp(depth, 0.0f, 0.6f)
+    /// `w` (m) in the given material. `maxDepth` is the deepest bite the
+    /// bucket geometry can take (beyond it the shell rides, not the edge).
+    let resistanceAt
+        (maxDepth: float32)
+        (props: SoilProperties)
+        (compaction: byte)
+        (moisture: byte)
+        (depth: float32)
+        (width: float32)
+        =
+        let d = Math.Clamp(depth, 0.0f, maxDepth)
         let gamma = Volume.density props compaction * 9.81f
         let gammaTerm = 0.5f * gamma * d * d * Tuning.FeeGammaFactor
 
@@ -24,3 +32,7 @@ module Fee =
         // Compacted bank cuts harder than fresh spoil.
         let compactionScale = 0.5f + 0.5f * float32 compaction / 255.0f
         (gammaTerm + cohesionTerm) * width * compactionScale
+
+    /// U17-class bucket (0.6 m bite ceiling).
+    let resistance (props: SoilProperties) (compaction: byte) (moisture: byte) (depth: float32) (width: float32) =
+        resistanceAt 0.6f props compaction moisture depth width

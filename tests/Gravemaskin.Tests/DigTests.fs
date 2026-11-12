@@ -52,8 +52,9 @@ let ``full dig-swing-dump cycle: payload fills, pours out, mass conserved`` () =
     let dugSurface = regionMin ()
     Assert.True(dugSurface < startSurface - 0.12f, $"a hole should form: {startSurface} -> {dugSurface}")
 
-    // Lift, swing away, open the bucket, let everything settle.
-    TestKit.stepAll 120 (inp 1.0f 0.0f -0.3f 0.0f) world |> ignore
+    // Lift clear of the trench (the bucket cannot swing through its
+    // walls), swing away, open the bucket, let everything settle.
+    TestKit.stepAll 200 (inp 1.0f 0.0f -0.3f 0.0f) world |> ignore
     TestKit.stepAll 100 (inp 0.0f 0.0f 0.0f 1.0f) world |> ignore
     let loadBeforeDump = machine.BucketLoadKg
     TestKit.stepAll 250 (inp 0.0f 0.0f 1.0f 0.0f) world |> ignore
@@ -101,7 +102,7 @@ let ``deep wet sand stalls the stick while the swing keeps moving`` () =
     TestKit.stepAll 220 (inp -1.0f 0.0f 0.0f 0.0f) world |> ignore
 
     let mutable stallSeen = false
-    let stickBefore = machine.StickAngle
+    let tipBefore = machine.BucketTipPosition
 
     for _ in 1..300 do
         // Crowd + curl together (the real dig stroke): the curl keeps the
@@ -113,10 +114,13 @@ let ``deep wet sand stalls the stick while the swing keeps moving`` () =
 
     Assert.True(stallSeen, "deep cohesive cut should stall a cylinder at some point")
 
-    // The stick specifically is what's stuck: 5 s of full crowd command in
-    // free air covers ~2 rad; in the cut it barely creeps.
-    let stickMoved = abs (machine.StickAngle - stickBefore)
-    Assert.True(stickMoved < 0.5f, $"the stick should be pinned by the cut: moved {stickMoved}")
+    // The cut pins the BUCKET: 5 s of full crowd in free air sweeps the
+    // teeth ~2 m; in the cut they barely creep. (Measured at the teeth, not
+    // the stick joint: with spoil staying in the hole the machine jacks its
+    // front up over the anchored bucket, which turns the joint without the
+    // edge going anywhere.)
+    let tipMoved = Vector3.Distance(machine.BucketTipPosition, tipBefore)
+    Assert.True(tipMoved < 1.0f, $"the teeth should be pinned by the cut: moved {tipMoved} m")
 
     // Flow independence (not mechanical — a buried arm really does anchor
     // the swing): the saturated dig circuit never starves the swing's own.
@@ -254,9 +258,9 @@ let ``a curled bucket physically cradles a clump-sized body`` () =
     Assert.True(ballPosition.Y > 0.5f, $"held aloft, not on the ground: y {ballPosition.Y}")
 
 [<Fact>]
-let ``a curled bucket scoops loose clumps into the payload`` () =
-    // Soil world: spill clumps, curl the bucket around them → they convert
-    // to payload mass (clump budget freed, weight still on the linkage).
+let ``a dumped pile can be dug up again`` () =
+    // Dumped soil is ordinary (loose) ground: the same cut that digs the
+    // bank reloads the bucket from the pile.
     let world, machine = digWorld Topsoil
     use _ = world
     // Fill by digging (bite, crowd, curl through — the real stroke), dump
@@ -265,7 +269,7 @@ let ``a curled bucket scoops loose clumps into the payload`` () =
     TestKit.stepAll 120 (inp 0.0f -1.0f 0.0f 0.0f) world |> ignore
     TestKit.stepAll 180 (inp 0.0f -0.5f -1.0f 0.0f) world |> ignore
     Assert.True(machine.BucketLoadKg > 20.0)
-    TestKit.stepAll 120 (inp 1.0f 0.0f 0.0f 0.0f) world |> ignore
+    TestKit.stepAll 200 (inp 1.0f 0.0f 0.0f 0.0f) world |> ignore
     TestKit.stepAll 280 (inp 0.0f 0.0f 1.0f 0.0f) world |> ignore
     let afterDump = machine.BucketLoadKg
     Assert.True(afterDump < 5.0, $"dumped: {afterDump} kg left")

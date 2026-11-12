@@ -92,8 +92,7 @@ let ``no clump ever tunnels below the soil or escapes the world`` () =
 
         // Every live clump must be above the bottom of the world.
         for i in 0 .. world.Clumps.Count - 1 do
-            let y =
-                world.Physics.Simulation.Bodies.[world.Clumps.Handles.[i]].Pose.Position.Y
+            let y = world.Clumps.PositionsY.[i]
 
             Assert.True(y > -10.0f, $"clump {i} fell out of the world at tick {tick}, y={y}")
 
@@ -110,7 +109,7 @@ let ``clump cap holds under greedy carving and drops no mass`` () =
         let z = 4.0f + float32 (tick / 8) * 0.8f
         world.CarveSphere(Vector3(x, 1.8f, z), 0.5f) |> ignore
         world.Step(TestKit.scriptedInput tick) |> ignore
-        Assert.True(world.Clumps.Count <= 1500, $"cap breached: {world.Clumps.Count}")
+        Assert.True(world.Clumps.Count <= Clumps.MaxClumps, $"cap breached: {world.Clumps.Count}")
 
     Assert.True(TestKit.conservationError world < 1e-6, $"error {TestKit.conservationError world}")
 

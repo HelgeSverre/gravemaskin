@@ -39,14 +39,14 @@ let ``cat 320 breakout force emerges from its data within spec tolerance`` () =
 [<Fact>]
 let ``the two machines are mechanically different, not palette swaps`` () =
     // A boom resistance that stalls the U17 cold is nothing to the 320.
-    let boomRise (rig: MachineRig) (resistTorque: float32) =
+    let boomRise (rig: MachineRig) (resistTorque: float32) (ticks: int) =
         let world = bigSoilWorld ()
         use _ = world
         let machine = world.SpawnMachineRig(rig, Vector3(16.0f, 0.0f, 16.0f))
         TestKit.stepAll 90 InputFrame.empty world |> ignore
         let start = machine.BoomAngle
 
-        for _ in 1..300 do
+        for _ in 1..ticks do
             let mutable boomRef = world.Physics.Simulation.Bodies.[machine.Boom]
 
             if not boomRef.Awake then
@@ -60,8 +60,11 @@ let ``the two machines are mechanically different, not palette swaps`` () =
     // 30 kN·m: proven to pin the U17 (its cap ≈ 24.5); the 320's boom cap
     // is ≈ 700 kN·m and its arm alone needs ~180, so it shrugs this off.
     let resist = 30_000.0f
-    Assert.True(boomRise Tuning.u17Rig resist < 0.05f, "30 kN·m must pin the U17 boom")
-    Assert.True(boomRise Tuning.cat320Rig resist > 0.4f, "the 320 should not notice 30 kN·m")
+    // The U17 is judged over 2 s: held longer, the torque drives its bucket
+    // into the ground and rolls the 1.7 t machine over, after which the
+    // joint angle says nothing about the boom's strength.
+    Assert.True(boomRise Tuning.u17Rig resist 120 < 0.05f, "30 kN·m must pin the U17 boom")
+    Assert.True(boomRise Tuning.cat320Rig resist 300 > 0.4f, "the 320 should not notice 30 kN·m")
 
 [<Fact>]
 [<Trait("Category", "Integration")>]

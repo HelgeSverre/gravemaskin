@@ -23,6 +23,26 @@ module SoilConfig =
     [<Literal>]
     let TileSize = 32
 
+/// The job site laid over the generated terrain (meters, world space):
+/// a graded yard, the staked foundation pit, the site cabin. Pure data so
+/// saves can carry it and the shell can draw/score it.
+[<Struct>]
+type SiteLayout =
+    { WorldX: float32
+      WorldZ: float32
+      YardX: float32
+      YardZ: float32
+      /// Graded pad level — also the pit's reference surface.
+      PadHeight: float32
+      PitMinX: float32
+      PitMinZ: float32
+      PitMaxX: float32
+      PitMaxZ: float32
+      /// Target excavation depth below PadHeight.
+      PitDepth: float32
+      CabinX: float32
+      CabinZ: float32 }
+
 type SoilState(config: SoilConfig) =
     let cells = config.CellsX * config.CellsY * config.CellsZ
     let columns = config.CellsX * config.CellsZ
@@ -63,6 +83,8 @@ type SoilState(config: SoilConfig) =
     member _.Moisture = moisture
     member _.Heights = heights
     member val WaterTableHeight = 0.0f with get, set
+    /// Job-site layout, when the terrain generator laid one out.
+    member val Site: SiteLayout voption = ValueNone with get, set
     member _.Ledger = ledger
     member _.Unbanked = unbanked
     member _.TilesX = tilesX
@@ -288,55 +310,61 @@ module Volume =
         refreshColumnHeight state x z
         state.MarkDirty(x, z)
 
-    /// Noise-seeded terrain: rolling height, clay under topsoil, dry-sand
-    /// patches. Initializes heights + ledger.
-    let fillTerrain (state: SoilState) (seed: int) (baseHeight: float32) (relief: float32) =
+    /// Lower a column's surface to `targetHeight` (m), taking soil off the
+    /// top in occupancy units — fractional, so a cut follows the blade
+    /// instead of popping out whole cells. Removed mass per material is
+    /// ADDED into `removedByMaterial` (kg); returns the kg removed. Mass is
+    /// the exact difference of the cells' scan masses, so the ledger holds.
+    /// With `looseOnly` the cut stops at the first bank (compacted) cell:
+    /// only loose spoil is taken, undisturbed ground is left alone.
+    let cutColumnWith
+        (state: SoilState)
+        (x: int)
+        (z: int)
+        (targetHeight: float32)
+        (removedByMaterial: float[])
+        (looseOnly: bool)
+        =
         let config = state.Config
-        // Groundwater sits under the low ground; lowlands dig up wet.
-        state.WaterTableHeight <- baseHeight - relief * 0.55f
+        let excess = state.Heights.[state.ColumnIndex(x, z)] - max targetHeight 0.0f
+        let mutable units = int (excess / config.CellSize * 255.0f)
 
-        for z in 0 .. config.CellsZ - 1 do
-            for x in 0 .. config.CellsX - 1 do
-                // Broad landforms (long wavelength) so there are workable
-                // flats between the hills — it's a dig site, not the Alps.
-                let point =
-                    System.Numerics.Vector2(float32 x * 0.02f, float32 z * 0.02f)
+        if units <= 0 then
+            0.0
+        else
+            let mutable total = 0.0
+            let mutable y = config.CellsY - 1
 
-                let height =
-                    baseHeight + (Noise.fbm2 seed 4 point - 0.5f) * 2.0f * relief
+            while units > 0 && y >= 0 do
+                let index = state.Index(x, y, z)
+                let occ = int state.Occupancy.[index]
 
-                let sandiness = Noise.fbm2 (seed + 7919) 2 (point * 0.32f)
-                let rockiness = Noise.fbm2 (seed + 4211) 2 (point * 0.42f)
-                let meadow = Noise.fbm2 (seed + 611) 2 (point * 0.22f)
-                let fullCells = max 1 (int (height / config.CellSize))
-                let nearWater = height < state.WaterTableHeight + 0.35f
+                if occ > 0 && looseOnly && state.Compaction.[index] >= 128uy then
+                    units <- 0
+                elif occ > 0 then
+                    let take = min occ units
+                    let matByte = state.Material.[index]
+                    let compByte = state.Compaction.[index]
 
-                for y in 0 .. min (fullCells - 1) (config.CellsY - 1) do
-                    let index = state.Index(x, y, z)
-                    let depthFromTop = float32 (fullCells - 1 - y) * config.CellSize
-                    let isSurface = y = min (fullCells - 1) (config.CellsY - 1)
+                    let mass =
+                        float (cellMass config (byte occ) matByte compByte)
+                        - float (cellMass config (byte (occ - take)) matByte compByte)
 
-                    // Thresholds set from the measured fbm2 percentiles
-                    // (2-octave noise is narrower than 4-octave): ~12%
-                    // sand, ~11% gravel, ~30% grass meadow.
-                    let mat =
-                        if depthFromTop > 0.6f then Clay
-                        elif rockiness > 0.70f then Gravel
-                        elif sandiness > 0.44f then (if nearWater then WetSand else DrySand)
-                        elif isSurface && meadow > 0.51f && not nearWater then Grass
-                        else Topsoil
+                    removedByMaterial.[int matByte] <- removedByMaterial.[int matByte] + mass
+                    total <- total + mass
+                    state.Occupancy.[index] <- byte (occ - take)
+                    units <- units - take
 
-                    state.Occupancy.[index] <- 255uy
-                    state.Material.[index] <- byteOfMaterial mat
-                    state.Compaction.[index] <- 255uy
-                    // Pre-wet up to the table so the world starts settled.
-                    if float32 y * config.CellSize < state.WaterTableHeight then
-                        state.Moisture.[index] <- 255uy
+                y <- y - 1
 
+            if total > 0.0 then
                 refreshColumnHeight state x z
+                state.MarkDirty(x, z)
 
-        let masses = scanMassByMaterial state
-        Array.blit masses 0 state.Ledger 0 MaterialCount
+            total
+
+    let cutColumnTo (state: SoilState) (x: int) (z: int) (targetHeight: float32) (removedByMaterial: float[]) =
+        cutColumnWith state x z targetHeight removedByMaterial false
 
     /// Fill the volume as flat bank-density terrain of one material up to
     /// `groundHeight` meters, and initialize heights + ledger.

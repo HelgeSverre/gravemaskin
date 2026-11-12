@@ -52,6 +52,11 @@ module TestKit =
                 for i in 0 .. Domain.MaterialCount - 1 do
                     totals.[i] <- totals.[i] + m.BucketLoad.[i]
             | None -> ()
+
+            // …and so is cut soil still riding the blade.
+            for i in 0 .. Domain.MaterialCount - 1 do
+                totals.[i] <- totals.[i] + world.SpillPending.[i]
+
             let mutable worst = 0.0
 
             for i in 0 .. totals.Length - 1 do

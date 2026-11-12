@@ -2,104 +2,148 @@ namespace Gravemaskin
 
 open System
 open System.Numerics
-open BepuPhysics
 
-/// Loose-soil clumps: BEPU sphere bodies with per-clump f64 mass so the
-/// ledger stays exact. Hard-capped; overflow mass deposits straight into the
-/// volume instead of spawning (conserves mass with zero body churn).
+/// Soil in flight: ballistic mass packets with per-packet f64 mass so the
+/// ledger stays exact. A packet is NOT a rigid body — dirt doesn't roll or
+/// bounce like a marble. It falls, and where it meets the ground its mass
+/// goes straight into the terrain, which then flows to its angle of repose
+/// (Settle). One model for every pile: the ground itself.
 [<RequireQualifiedAccess>]
 module Clumps =
     [<Literal>]
-    let MaxClumps = 1500
+    let MaxClumps = 3000
 
-    /// Below this speed for SettleTicks consecutive ticks (or asleep), a
-    /// clump banks back into the volume.
-    let SettleSpeedSq = 0.09f * 0.09f
+    /// Render radius bounds (m).
+    let MinRadius = 0.04f
+    let MaxRadius = 0.12f
 
-    [<Literal>]
-    let SettleTicks = 18
+    /// Horizontal air drag (1/s): a thrown shovelful loses its sideways
+    /// speed over a second or so and drops.
+    let AirDrag = 0.9f
 
-    let MinRadius = 0.05f
-    let MaxRadius = 0.15f
+    /// Terminal fall speed (m/s).
+    let MaxFallSpeed = 12.0f
 
 type ClumpPool() =
-    let handles = Array.zeroCreate<BodyHandle> Clumps.MaxClumps
+    let ids = Array.zeroCreate<int> Clumps.MaxClumps
+    let positionsX = Array.zeroCreate<float32> Clumps.MaxClumps
+    let positionsY = Array.zeroCreate<float32> Clumps.MaxClumps
+    let positionsZ = Array.zeroCreate<float32> Clumps.MaxClumps
+    let velocitiesX = Array.zeroCreate<float32> Clumps.MaxClumps
+    let velocitiesY = Array.zeroCreate<float32> Clumps.MaxClumps
+    let velocitiesZ = Array.zeroCreate<float32> Clumps.MaxClumps
     let masses = Array.zeroCreate<float> Clumps.MaxClumps
     let materials = Array.zeroCreate<byte> Clumps.MaxClumps
-    let stillTicks = Array.zeroCreate<int> Clumps.MaxClumps
     let mutable count = 0
+    let mutable nextId = 1
 
     member _.Count = count
-    member _.Handles = handles
+    /// Stable per-packet ids (the shell interpolates by id).
+    member _.Ids = ids
+    member _.PositionsX = positionsX
+    member _.PositionsY = positionsY
+    member _.PositionsZ = positionsZ
+    member _.VelocitiesX = velocitiesX
+    member _.VelocitiesY = velocitiesY
+    member _.VelocitiesZ = velocitiesZ
     member _.Masses = masses
     member _.Materials = materials
 
-    /// Total live clump mass per material, added into `totals`.
+    member _.Position(index: int) =
+        Vector3(positionsX.[index], positionsY.[index], positionsZ.[index])
+
+    /// Total in-flight mass per material, added into `totals`.
     member _.AddMassTotals(totals: float[]) =
         for i in 0 .. count - 1 do
             totals.[int materials.[i]] <- totals.[int materials.[i]] + masses.[i]
 
-    member _.TrySpawn(simulation: Simulation, position: Vector3, mass: float, material: SoilMaterial) =
+    member _.TrySpawn(position: Vector3, velocity: Vector3, mass: float, material: SoilMaterial) =
         if count >= Clumps.MaxClumps || mass <= 0.0 then
             false
         else
-            let props = Tuning.soil material
-            let volume = float32 mass / Volume.looseDensity props
-
-            let radius =
-                MathF.Cbrt(volume * 3.0f / (4.0f * MathF.PI))
-                |> max Clumps.MinRadius
-                |> min Clumps.MaxRadius
-
-            handles.[count] <- Bepu.addDynamicSphere simulation position radius (float32 mass)
+            ids.[count] <- nextId
+            nextId <- nextId + 1
+            positionsX.[count] <- position.X
+            positionsY.[count] <- position.Y
+            positionsZ.[count] <- position.Z
+            velocitiesX.[count] <- velocity.X
+            velocitiesY.[count] <- velocity.Y
+            velocitiesZ.[count] <- velocity.Z
             masses.[count] <- mass
             materials.[count] <- Volume.byteOfMaterial material
-            stillTicks.[count] <- 0
             count <- count + 1
             true
 
-    /// Swap-remove clump i, removing its body from the simulation.
-    member _.RemoveAt(simulation: Simulation, index: int) =
-        simulation.Bodies.Remove(handles.[index])
+    /// Swap-remove packet i.
+    member _.RemoveAt(index: int) =
         count <- count - 1
 
         if index < count then
-            handles.[index] <- handles.[count]
+            ids.[index] <- ids.[count]
+            positionsX.[index] <- positionsX.[count]
+            positionsY.[index] <- positionsY.[count]
+            positionsZ.[index] <- positionsZ.[count]
+            velocitiesX.[index] <- velocitiesX.[count]
+            velocitiesY.[index] <- velocitiesY.[count]
+            velocitiesZ.[index] <- velocitiesZ.[count]
             masses.[index] <- masses.[count]
             materials.[index] <- materials.[count]
-            stillTicks.[index] <- stillTicks.[count]
 
-    /// Per-tick pass: settle resting clumps back into the volume, and return
-    /// escaped clumps' mass to the ledger via a clamped-column deposit
-    /// (mass-loss guard: nothing ever just despawns).
-    member this.SettlePass(simulation: Simulation, state: SoilState) =
+    /// Land a mass on the ground at a world XZ: split bilinearly over the
+    /// four nearest columns, so a stream builds a smooth mound rather than
+    /// one-column spikes. Exact: the last share is the remainder.
+    static member Land(state: SoilState, x: float32, z: float32, mass: float, material: SoilMaterial) =
         let config = state.Config
+        let gx = x / config.CellSize - 0.5f
+        let gz = z / config.CellSize - 0.5f
+        let x0 = int (MathF.Floor gx)
+        let z0 = int (MathF.Floor gz)
+        let fx = float (gx - float32 x0)
+        let fz = float (gz - float32 z0)
+        let clampX (v: int) = v |> max 0 |> min (config.CellsX - 1)
+        let clampZ (v: int) = v |> max 0 |> min (config.CellsZ - 1)
+        let m00 = mass * (1.0 - fx) * (1.0 - fz)
+        let m10 = mass * fx * (1.0 - fz)
+        let m01 = mass * (1.0 - fx) * fz
+        let m11 = mass - m00 - m10 - m01
+        Volume.deposit state (clampX x0) (clampZ z0) m00 material
+        Volume.deposit state (clampX (x0 + 1)) (clampZ z0) m10 material
+        Volume.deposit state (clampX x0) (clampZ (z0 + 1)) m01 material
+
+        if m11 > 0.0 then
+            Volume.deposit state (clampX (x0 + 1)) (clampZ (z0 + 1)) m11 material
+        else
+            // Rounding left the remainder at/below zero: fold it into the
+            // residual so the ledger still balances to the last bit.
+            state.Unbanked.[int (Volume.byteOfMaterial material)] <-
+                state.Unbanked.[int (Volume.byteOfMaterial material)] + m11
+
+    /// One tick: integrate every packet; those that reach the ground land
+    /// (mass into the terrain) and are removed. Nothing ever just despawns.
+    member this.Step(state: SoilState, dt: float32) =
+        let config = state.Config
+        let worldX = float32 config.CellsX * config.CellSize
+        let worldZ = float32 config.CellsZ * config.CellSize
+        let drag = MathF.Max(0.0f, 1.0f - Clumps.AirDrag * dt)
         let mutable i = 0
 
         while i < count do
-            let bodyRef = simulation.Bodies.[handles.[i]]
-            let position = bodyRef.Pose.Position
-            let escaped = position.Y < -10.0f
+            velocitiesY.[i] <- MathF.Max(velocitiesY.[i] - 9.81f * dt, -Clumps.MaxFallSpeed)
+            velocitiesX.[i] <- velocitiesX.[i] * drag
+            velocitiesZ.[i] <- velocitiesZ.[i] * drag
+            // The world edge is a wall: soil stops there and drops.
+            let x = Math.Clamp(positionsX.[i] + velocitiesX.[i] * dt, 0.01f, worldX - 0.01f)
+            let z = Math.Clamp(positionsZ.[i] + velocitiesZ.[i] * dt, 0.01f, worldZ - 0.01f)
+            let y = positionsY.[i] + velocitiesY.[i] * dt
+            positionsX.[i] <- x
+            positionsY.[i] <- y
+            positionsZ.[i] <- z
+            let cx = int (x / config.CellSize) |> max 0 |> min (config.CellsX - 1)
+            let cz = int (z / config.CellSize) |> max 0 |> min (config.CellsZ - 1)
 
-            let resting =
-                if not bodyRef.Awake then
-                    true
-                else
-                    let velocity = bodyRef.Velocity.Linear
-
-                    if velocity.LengthSquared() < Clumps.SettleSpeedSq then
-                        stillTicks.[i] <- stillTicks.[i] + 1
-                        stillTicks.[i] >= Clumps.SettleTicks
-                    else
-                        stillTicks.[i] <- 0
-                        false
-
-            if escaped || resting then
-                let x = int (position.X / config.CellSize) |> max 0 |> min (config.CellsX - 1)
-                let z = int (position.Z / config.CellSize) |> max 0 |> min (config.CellsZ - 1)
-                Volume.deposit state x z masses.[i] (Volume.materialOfByte materials.[i])
-                this.RemoveAt(simulation, i)
-            // note: no i increment after swap-remove — the swapped-in clump
-            // gets evaluated next loop.
+            if y <= state.Heights.[state.ColumnIndex(cx, cz)] then
+                ClumpPool.Land(state, x, z, masses.[i], Volume.materialOfByte materials.[i])
+                this.RemoveAt i
+            // no increment after swap-remove: the swapped-in packet is next.
             else
                 i <- i + 1

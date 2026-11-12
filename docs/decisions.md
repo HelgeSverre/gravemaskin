@@ -72,3 +72,66 @@ crumble flows toward the mouth. The mass transport itself remains the
 ledgered payload scalar (the training-sim standard); the heap is its honest
 presentation. The bucket shell is drawn tilted 45° (mouth down-back at
 rest, up at carry) over the axis-aligned collision container.
+
+## 2026-11-11 — Review pass: swept cut, gravity pour, job site
+
+- **Blade cut is a fractional column cut** (`Carve.bowl` → `Volume.cutColumnTo`):
+  columns under the edge are lowered to the bowl's underside in occupancy
+  units, so removal is proportional to what the lip swept. The old sphere
+  carve popped out whole 0.25 m cells. Removed mass is the exact difference
+  of the cells' scan masses, so the ledger still balances to the bit.
+  `Carve.sphere` stays for the debug brush.
+- **Cut geometry derives from the rig**: bowl radius × √scale, lip width ×
+  scale, several cut points along a wide lip, fill rate × capacity. The Cat
+  320 was digging with the U17's constants.
+- **Spill rides the blade** (`World.SpillPending`): un-captured cut soil
+  accumulates and leaves as shovelful clumps. It is mass in flight — the
+  conservation check counts it next to clumps and the payload.
+- **Gravity empties the bucket**: retention is a function of the mouth's
+  world tilt (`Machine.Retention`), not the bucket joint angle; teeth below
+  the bench hold the load in. `MachineRig.DumpAngle` is gone.
+- **FEE samples the bench** (`Soil.sampleBelow`) instead of the cell at the
+  edge, which the previous tick had emptied — clay now resists like clay.
+  Resistance also rises with bucket fill (surcharge).
+- **Tracks**: three contact points per side, drive along the chassis (slope-
+  following), travel brakes when the lever is home, `TrackSlip` raised.
+- **World boundary**: four static walls; the soil mesh used to just end.
+- **Job site** (`Soil/Terrain.fs`): graded yard and road, staked foundation
+  pit with a progress readout, loose stockpiles, knoll, gravel-pit pond,
+  creek under the water table, sand/gravel lenses in the clay, fractional
+  surface heights. Worlds under 56 m get plain terrain. Scenery (spruce,
+  boulders, cabin) is seeded by `World.SeedScenery`.
+- **Save format GRAV3**: adds machine heading, trees and the site layout;
+  GRAV2 still loads.
+
+## 2026-11-12 — Loose soil redone: packets in flight, piles as terrain
+
+Loose soil had three overlapping representations: BEPU sphere bodies
+("clumps") that rolled, rested 18 ticks and then banked into one column;
+a cosmetic grain layer with its own pile-height field that decayed after
+9 s; and a four-neighbour settle pass. The result was dirt that rolled like
+marbles, heaps that appeared twice and then faded, and diamond-shaped piles.
+
+Now there is one model:
+
+- **In flight:** `ClumpPool` (Soil/Particles.fs) holds ballistic mass
+  packets — position, velocity, f64 mass, material. No rigid bodies, no
+  collisions. A packet that reaches the ground lands: its mass is split
+  bilinearly over the four nearest columns (`ClumpPool.Land`) and the
+  packet is gone. Cap 3000.
+- **At rest:** the terrain. `Settle` relaxes every column against all
+  eight neighbours with the true distance, so heaps are round cones at
+  `Settle.reposeSlope` (tan φ plus a capped cohesion term). Cohesionless
+  bank (dry sand, gravel) follows the same rule; cohesive bank still fails
+  as a wedge, which now falls to the low side (`WallFailure.LowX/LowZ`).
+- **Bucket vs loose soil:** terrain is a static collision mesh, so a berm
+  would be a wall. The bucket shell ploughs instead: loose (uncompacted)
+  soil overlapping the bucket body is removed (`Soil.ploughLoose`, bank is
+  untouched) and thrown ahead of the bucket's motion. The clump-absorbing
+  "scoop" is gone; a dumped pile reloads through the ordinary cut.
+- **Grains:** airborne dust and crumbs only. A grain that lands sinks into
+  the surface within 0.3 s; the layer keeps no pile of its own.
+
+Consequences: packets fall through machine bodies (nothing rests on the
+boom or tracks); a sleeping machine is now woken by arm/swing input
+(previously live clump bodies kept it awake by accident).

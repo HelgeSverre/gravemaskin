@@ -177,7 +177,8 @@ let main args =
     let mutable cameraPosition = Vector3(32.0f, 10.0f, 44.0f)
     let mutable yaw = -1.57f
     let mutable pitch = -0.45f
-    let mutable orbitYaw = 2.5f
+    let mutable orbitYaw =
+        argValue "--orbit" |> Option.map float32 |> Option.defaultValue 2.5f
     let mutable orbitPitch = 0.5f
     let mutable orbitDistance =
         argValue "--zoom" |> Option.map float32 |> Option.defaultValue 9.0f
@@ -193,6 +194,7 @@ let main args =
     let mutable statFrames = 0
     let mutable statTime = 0.0
     let mutable statFps = 0.0f
+    let mutable pitProgress = -1.0f
 
     window.add_Load (fun () ->
         gl <- GL.GetApi window
@@ -228,6 +230,7 @@ let main args =
 
         if previewDir.IsNone then
             world.SeedRocks 48
+            world.SeedScenery()
         grains <- GrainPool(120_000, state)
         renderer <- new Renderer(gl, state)
         hud <- Hud(gl)
@@ -408,7 +411,7 @@ let main args =
                 // Scripted dig-swing-dump loop for demos and screenshots —
                 // the real stroke: bite with the bucket open, crowd the
                 // bench, curl through to fill, lift, swing, pour.
-                match (world.Tick / 110L) % 8L with
+                match (world.Tick / 110L) % 9L with
                 | 0L -> { InputFrame.empty with Boom = -1.0f }
                 | 1L -> { InputFrame.empty with Stick = -1.0f }
                 | 2L
@@ -416,8 +419,9 @@ let main args =
                     { InputFrame.empty with
                         Stick = -0.5f
                         Bucket = -1.0f }
-                | 4L -> { InputFrame.empty with Boom = 1.0f; Bucket = -0.3f }
-                | 5L -> { InputFrame.empty with Swing = 0.8f }
+                | 4L
+                | 5L -> { InputFrame.empty with Boom = 1.0f; Bucket = -0.3f } // clear the trench walls
+                | 6L -> { InputFrame.empty with Swing = 0.8f }
                 | _ -> { InputFrame.empty with Bucket = 1.0f } // long open: pour it all
             elif flyMode then
                 InputFrame.empty
@@ -538,7 +542,7 @@ let main args =
                             0.35f,
                             Volume.materialOfByte dumpedMat,
                             moistByte,
-                            Math.Clamp(int (mass * 330.0f), 30, 700)
+                            Math.Clamp(int (mass * 40.0f), 6, 90)
                         )
                     | DigStarted ->
                         // Crumble off the cutting edge, drawn INTO the mouth
@@ -555,12 +559,29 @@ let main args =
                             else
                                 Vector3.Zero
 
-                        grains.SpawnBurst(tip, tipVelocity * 0.5f + intoMouth, 0.4f, tipMaterial, moistByte, 22)
+                        grains.SpawnBurst(tip, tipVelocity * 0.4f + intoMouth * 0.35f, 0.3f, tipMaterial, moistByte, 6)
                     | WallCollapsed ->
                         // The wedge clumps burst into clusters on their own;
                         // add a dust breath at the machine's general area.
                         ()
                     | RockStruck -> grains.SpawnBurst(tip, Vector3(0.0f, 0.8f, 0.0f), 1.2f, Gravel, 0uy, 24)
+                    | TrackSlip ->
+                        // Spinning tracks throw dirt out behind them.
+                        for side in 0..1 do
+                            let contact = m.TrackContactPointAt(side, 0)
+                            let ground = Soil.surfaceHeight state contact.X contact.Z
+
+                            if contact.Y - ground < 0.35f * m.Rig.Scale then
+                                let struct (slipMat, slipMoist) = Soil.surfaceSample state contact.X contact.Z
+
+                                grains.SpawnBurst(
+                                    Vector3(contact.X, ground + 0.08f, contact.Z),
+                                    Vector3(0.0f, 1.4f, 0.0f),
+                                    1.1f,
+                                    Volume.materialOfByte slipMat,
+                                    slipMoist,
+                                    10
+                                )
                     | _ -> ()
 
                 // Track spray while driving.
@@ -629,22 +650,43 @@ let main args =
                 margin + line,
                 70.0f * uiScale,
                 5.0f * uiScale,
-                float32 (m.BucketLoadKg / Tuning.BucketCapacityKg),
+                float32 (m.BucketLoadKg / m.Rig.BucketCapacityKg),
                 orange
             )
+
+            // What the teeth are in — the reason one bite curls through
+            // and the next one stalls.
+            let tip = m.BucketTipPosition
+            let struct (tipMaterial, _) = Soil.surfaceSample state tip.X tip.Z
+
+            let soilName =
+                match Volume.materialOfByte tipMaterial with
+                | Topsoil -> "TOPSOIL"
+                | DrySand -> "DRY SAND"
+                | WetSand -> "WET SAND"
+                | Gravel -> "GRAVEL"
+                | Clay -> "CLAY"
+                | Grass -> "TURF"
+
+            hud.Text(margin + 78.0f * uiScale, margin + line, uiScale * 0.7f, Vector4(0.85f, 0.85f, 0.82f, 0.7f), soilName)
 
             // Pump-circuit saturation, labeled by the dominant function on
             // each circuit: a full bar = that pump is maxed out, which is
             // exactly when everything on it slows down.
-            let circuitOf = [| 0; 1; 0; 2; 0; 1 |]
-            let circuitLabel = [| "BOOM"; "STICK"; "SWING" |]
+            // The rig says how many pumps it has: the U17-class minis run
+            // three circuits, the Cat 320 one big one.
+            let circuitCount = m.Rig.Spec.Circuits.Length
+
+            let circuitLabel =
+                if circuitCount >= 3 then [| "BOOM"; "STICK"; "SWING" |] else [| "MAIN"; ""; "" |]
+
             hud.Text(margin, margin + line * 2.5f, uiScale * 0.7f, Vector4(0.85f, 0.85f, 0.82f, 0.7f), "PUMP LOAD")
 
-            for circuit in 0..2 do
+            for circuit in 0 .. min circuitCount 3 - 1 do
                 let mutable saturation = 0.0f
 
                 for f in 0..5 do
-                    if circuitOf.[f] = circuit then
+                    if m.CircuitOf f = circuit then
                         saturation <- MathF.Max(saturation, 1.0f - m.GrantedScale f)
 
                 let y = margin + line * (3.5f + float32 circuit)
@@ -664,6 +706,19 @@ let main args =
             if m.StallActive && (world.Tick / 15L) % 2L = 0L then
                 hud.Text(margin, margin + line * 8.2f, uiScale, red, "STALL")
         | None -> ()
+
+        // The job: dig the staked foundation pit to depth.
+        if showHud then
+            if frameCount % 20L = 0L then
+                pitProgress <- Terrain.pitProgress state
+
+            if pitProgress >= 0.0f then
+                let u = uiScale
+                let x = float32 size.X * 0.5f - 60.0f * u
+                let finished = pitProgress >= 0.97f
+                let label = if finished then "FOUNDATION PIT  DONE" else $"FOUNDATION PIT  %.0f{pitProgress * 100.0f}%%"
+                hud.Text(x, 10.0f * u, u * 0.8f, (if finished then orange else white), label)
+                hud.Bar(x, 20.0f * u, 120.0f * u, 4.0f * u, pitProgress, orange)
 
         // Small stat line under the tilt readout.
         if showHud then

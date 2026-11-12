@@ -16,7 +16,7 @@ module Soil =
 
     let createTerrain (config: SoilConfig) (seed: int) (baseHeight: float32) (relief: float32) =
         let state = SoilState(config)
-        Volume.fillTerrain state seed baseHeight relief
+        Terrain.fill state seed baseHeight relief
         state
 
     let surfaceHeight (state: SoilState) (x: float32) (z: float32) =
@@ -29,6 +29,32 @@ module Soil =
     /// the caller-owned `removedByMaterial` (kg). Returns total kg removed.
     let carveSphere (state: SoilState) (center: Vector3) (radius: float32) (removedByMaterial: float[]) =
         Carve.sphere state center radius removedByMaterial
+
+    /// The blade's swept cut (see Carve.bowl): accumulates into
+    /// `removedByMaterial` without zeroing it. Returns kg removed.
+    let carveBowl (state: SoilState) (center: Vector3) (radius: float32) (removedByMaterial: float[]) =
+        Carve.bowl state center radius removedByMaterial
+
+    /// Loose spoil under a sphere (the bucket shell), removed down to the
+    /// sphere's underside; bank soil is untouched. Accumulates like
+    /// `carveBowl`. Returns kg removed.
+    let ploughLoose (state: SoilState) (center: Vector3) (radius: float32) (removedByMaterial: float[]) =
+        Carve.looseBowl state center radius removedByMaterial
+
+    /// Material, compaction and moisture of the soil the cutting edge is
+    /// actually in: the first occupied cell at or below `y` in that column.
+    /// (The cell AT the edge is usually the one the last tick carved empty.)
+    let sampleBelow (state: SoilState) (x: float32) (y: float32) (z: float32) =
+        let config = state.Config
+        let cx = int (x / config.CellSize) |> max 0 |> min (config.CellsX - 1)
+        let cz = int (z / config.CellSize) |> max 0 |> min (config.CellsZ - 1)
+        let mutable cy = int (y / config.CellSize) |> max 0 |> min (config.CellsY - 1)
+
+        while cy > 0 && state.Occupancy.[state.Index(cx, cy, cz)] = 0uy do
+            cy <- cy - 1
+
+        let index = state.Index(cx, cy, cz)
+        struct (state.Material.[index], state.Compaction.[index], state.Moisture.[index])
 
     /// Deposit loose mass (kg) at a world position's column.
     let deposit (state: SoilState) (position: Vector3) (mass: float) (mat: SoilMaterial) =
