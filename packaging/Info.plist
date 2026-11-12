@@ -7,7 +7,7 @@
   <key>CFBundleDisplayName</key>
   <string>Gravemaskin</string>
   <key>CFBundleIdentifier</key>
-  <string>com.helgesverre.gravemaskin</string>
+  <string>no.helgesverre.gravemaskin</string>
   <key>CFBundleVersion</key>
   <string>@VERSION@</string>
   <key>CFBundleShortVersionString</key>

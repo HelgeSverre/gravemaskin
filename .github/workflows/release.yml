@@ -83,7 +83,7 @@ jobs:
           codesign --force --deep -s - "$app"
 
           pkgbuild --component "$app" --install-location /Applications \
-            --identifier com.helgesverre.gravemaskin --version "$VERSION" \
+            --identifier no.helgesverre.gravemaskin --version "$VERSION" \
             gravemaskin-macos-universal.pkg
       - uses: actions/upload-artifact@v4
         with:
